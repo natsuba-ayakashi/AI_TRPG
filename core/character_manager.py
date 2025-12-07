@@ -1,4 +1,5 @@
 import json
+from core.data_loader import DataLoader
 
 def get_nested_attr(obj, attr_string, default=None):
     """'a.b.c' のような文字列でネストされた属性を取得する"""
@@ -7,6 +8,8 @@ def get_nested_attr(obj, attr_string, default=None):
         obj = getattr(obj, attr, {}) if isinstance(obj, object) and not isinstance(obj, dict) else obj.get(attr)
         if obj is None: return default
     return obj
+
+item_data_loader = DataLoader("game_data")
 
 class Character:
     """キャラクターのデータと操作を管理するクラス"""
@@ -36,6 +39,26 @@ class Character:
             "tactical": 1,
             "enthusiastic": 1
         })
+
+    def get_effective_stats(self) -> dict:
+        """装備品の効果を反映した後の実効ステータスを計算して返す"""
+        effective_stats = self.stats.copy()
+        equipped_gear = self.equipment.get("equipped_gear", []) # 装備中のアイテムリストを取得
+        all_items_data = item_data_loader.get('items')
+
+        if not all_items_data:
+            return effective_stats
+
+        for item_name in equipped_gear: # 装備中のアイテムのみループ
+            item_data = all_items_data.get(item_name)
+            if item_data and "effects" in item_data:
+                for effect in item_data["effects"]:
+                    if effect.get("type") == "stat_mod":
+                        stat_to_mod = effect.get("stat")
+                        value = effect.get("value", 0)
+                        if stat_to_mod in effective_stats:
+                            effective_stats[stat_to_mod] += value
+        return effective_stats
 
     def apply_update(self, updates):
         """AIからの更新指示をキャラクターに適用し、GM親和性を更新する"""
@@ -95,7 +118,7 @@ class Character:
             "gender": self.gender,
             "appearance": self.appearance,
             "background": self.background,
-            "stats": self.stats,
+            "stats": self.get_effective_stats(), # 実効ステータスを返す
             "traits": self.traits,
             "skills": self.skills,
             "secrets": self.secrets,

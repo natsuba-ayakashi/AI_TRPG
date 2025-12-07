@@ -1,4 +1,6 @@
 from typing import Dict, Any, Optional
+import asyncio
+from collections import defaultdict
 
 from core.character_manager import Character
 
@@ -19,6 +21,8 @@ class GameManager:
     """アクティブな全てのゲームセッションを管理するクラス"""
     def __init__(self):
         self._sessions: Dict[int, GameSession] = {}
+        # ユーザーIDごとにロックを管理するための辞書
+        self._locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def has_session(self, user_id: int) -> bool:
         """指定されたユーザーのセッションが存在するかどうかを確認します。"""
@@ -27,6 +31,10 @@ class GameManager:
     def get_session(self, user_id: int) -> Optional[GameSession]:
         """指定されたユーザーのセッションを取得します。"""
         return self._sessions.get(user_id)
+
+    def get_lock(self, user_id: int) -> asyncio.Lock:
+        """指定されたユーザーのロックオブジェクトを取得します。"""
+        return self._locks[user_id]
 
     def create_session(self, user_id: int, character: Character, world_setting: str, thread_id: int, legacy_log: Optional[Dict] = None) -> GameSession:
         """新しいゲームセッションを作成または上書きします。"""

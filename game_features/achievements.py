@@ -31,24 +31,28 @@ ACHIEVEMENTS = {
         "description": "最初の冒険を始める。",
         "condition": check_first_step,
         "hidden": False,
+        "reward_item": "冒険者の心得" # 報酬アイテム
     },
     "moneybags": {
         "name": "小さな富豪",
         "description": "所持金が1000Gを超える。",
         "condition": check_moneybags,
         "hidden": False,
+        "reward_item": "幸運のコイン" # 報酬アイテム
     },
     "collector": {
         "name": "コレクター",
         "description": "10種類以上の異なるアイテムを所持する。",
         "condition": check_collector,
         "hidden": True, # 隠し実績
+        # この実績には報酬がない例
     },
     "game_clear": {
         "name": "英雄の誕生",
         "description": "物語を英雄的な結末に導く。",
         "condition": check_game_clear, # 特殊な条件
         "hidden": False,
+        "reward_item": "英雄の証" # 報酬アイテム
     }
 }
 

@@ -6,6 +6,7 @@ import random
 import asyncio
 from dotenv import load_dotenv
 
+from core.data_loader import DataLoader
 from core.character_manager import Character, get_nested_attr
 from core.game_manager import GameManager
 from core.game_state import save_game, list_characters, delete_character, save_legacy_log, load_legacy_log
@@ -13,6 +14,8 @@ from game_features.achievements import ACHIEVEMENTS
 from config import INITIAL_CHARACTER_DATA
 from game_features import bgm_manager
 from ui import ui_components
+from ui import inventory_view
+from errors import GameError, FileOperationError, CharacterNotFoundError, AIConnectionError
 from game_features import game_logic
 
 # --- 初期設定 ---
@@ -21,6 +24,10 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHAR_SHEET_CHANNEL_ID = int(os.getenv("CHAR_SHEET_CHANNEL_ID", 0))
 SCENARIO_LOG_CHANNEL_ID = int(os.getenv("SCENARIO_LOG_CHANNEL_ID", 0))
 PLAY_LOG_CHANNEL_ID = int(os.getenv("PLAY_LOG_CHANNEL_ID", 0))
+
+# --- データ読み込み ---
+world_data_loader = DataLoader("game_data/worlds")
+WORLD_SETTING_CHOICES = [app_commands.Choice(name=data['name'], value=key) for key, data in world_data_loader.get_all().items()]
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -31,9 +38,33 @@ tree = discord.app_commands.CommandTree(client) # CommandTreeをClientに紐付�
 # ゲームセッションを管理するGameManagerのインスタンス
 game_manager = GameManager()
 
+def setup_dependencies():
+    """各モジュールに必要な依存関係を設定します。"""
+    # 起動時に各モジュールに必要なグローバル変数を設定
+    game_logic.game_manager = game_manager
+    ui_components.game_manager = game_manager
+    ui_components.setup_and_start_game = game_logic.setup_and_start_game
+    ui_components.create_character_embed = game_logic.create_character_embed
+    game_logic.client = client
+    game_logic.SCENARIO_LOG_CHANNEL_ID = SCENARIO_LOG_CHANNEL_ID
+    game_logic.PLAY_LOG_CHANNEL_ID = PLAY_LOG_CHANNEL_ID
+    game_logic.build_item_use_prompt = game_features.ai_handler.build_item_use_prompt
+    game_logic.build_check_result_prompt = game_features.ai_handler.build_check_result_prompt
+    ui_components.client = client
+    ui_components.CHAR_SHEET_CHANNEL_ID = CHAR_SHEET_CHANNEL_ID
+    ui_components.start_game_turn = game_logic.start_game_turn
+    ui_components.build_action_result_prompt = game_features.ai_handler.build_action_result_prompt
+    ui_components.handle_skill_check = game_logic.handle_skill_check
+    inventory_view.game_manager = game_manager
+    # game_logic.handle_item_use をインベントリViewに渡す
+    inventory_view.handle_item_use = game_logic.handle_item_use
+    bgm_manager.client = client
+
 @client.event
 async def on_ready():
     print(f'{client.user} としてDiscordにログインしました')
+    setup_dependencies()
+    print("モジュールの依存関係を設定しました。")
     # スラッシュコマンドをDiscordに同期
     await tree.sync()
     print("スラッシュコマンドを同期しました。")
@@ -60,82 +91,79 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             await bgm_manager.stop_bgm(member.guild)
             await voice_client.disconnect()
 
-WORLD_SETTING_CHOICES = [
-    app_commands.Choice(name="一般的なファンタジー世界", value="一般的なファンタジー世界"),
-    app_commands.Choice(name="クトゥルフ神話TRPG風", value="クトゥルフ神話TRPG風の現代"),
-    app_commands.Choice(name="ソードワールド風", value="ソードワールド風の剣と魔法の世界"),
-    app_commands.Choice(name="サイバーパンク", value="ネオン輝く巨大都市を舞台にしたサイバーパンク"),
-    app_commands.Choice(name="スチームパンク", value="蒸気機関と歯車が支配するスチームパンク世界"),
-]
-
 @tree.command(name="create", description="あなただけのオリジナルキャラクターを作成して冒険を始めます。")
 @app_commands.choices(world_setting=WORLD_SETTING_CHOICES)
 @app_commands.describe(custom_world_setting="世界観を自由に記述します。こちらが優先されます。")
 async def create_character_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None, custom_world_setting: str = None):
     user_id = interaction.user.id
-    if game_manager.has_session(user_id):
-        await interaction.response.send_message("既にゲームが進行中です。新しいキャラクターで始めるには、まず `/quit` で現在のゲームを終了してください。", ephemeral=True)
-        return
-    
-    # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
-    ws_value = custom_world_setting or (world_setting.value if world_setting else "一般的なファンタジー世界")
-    modal = ui_components.CharacterCreationModal(world_setting=ws_value)
-    await interaction.response.send_modal(modal)
+    async with game_manager.get_lock(user_id):
+        if game_manager.has_session(user_id):
+            await interaction.response.send_message("既にゲームが進行中です。新しいキャラクターで始めるには、まず `/quit` で現在のゲームを終了してください。", ephemeral=True)
+            return
+        
+        # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
+        # 選択された場合はキー(fantasyなど)、カスタム入力はそのまま文字列として渡す
+        ws_value = custom_world_setting or (world_setting.value if world_setting else "fantasy")
+        # world_setting.valueは 'fantasy' のようなキーになる
+
+        modal = ui_components.CharacterCreationModal(world_setting=ws_value)
+        await interaction.response.send_modal(modal)
 
 @tree.command(name="start", description="新しい冒険を開始、または中断した冒険を再開します。")
 @app_commands.choices(world_setting=WORLD_SETTING_CHOICES)
 @app_commands.describe(custom_world_setting="世界観を自由に記述します。こちらが優先されます。")
 async def start_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None, custom_world_setting: str = None):
     user_id = interaction.user.id
-    if game_manager.has_session(user_id):
-        await interaction.response.send_message("既にゲームが進行中です。リセットしてやり直す場合は `/reset` を入力してください。", ephemeral=True)
-        return
+    async with game_manager.get_lock(user_id):
+        if game_manager.has_session(user_id):
+            await interaction.response.send_message("既にゲームが進行中です。リセットしてやり直す場合は `/reset` を入力してください。", ephemeral=True)
+            return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
-    saved_characters = list_characters(user_id)
-    if saved_characters:
-        # 保存されたキャラクターが1人以上いる場合、選択肢を提示
-        view = ui_components.CharacterSelectView(user_id, saved_characters)
-        await interaction.followup.send("どのキャラクターで冒険を再開しますか？", view=view, ephemeral=True)
-    else:
-        # セーブデータがない場合、新しいキャラクターで開始
-        # この部分は /create コマンドに役割を統合しても良いかもしれません
-        from config import INITIAL_CHARACTER_DATA
-        character = Character(INITIAL_CHARACTER_DATA)
-        # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
-        ws_value = custom_world_setting or (world_setting.value if world_setting else "一般的なファンタジー世界")
-        view = ui_components.GameStartView(user_id, character, ws_value)
-        await interaction.followup.send("新しいキャラクターで冒険を始めます。\nGMの性格を選んでください。", embed=game_logic.create_character_embed(character), view=view, ephemeral=True)
+        saved_characters = list_characters(user_id)
+        if saved_characters:
+            # 保存されたキャラクターが1人以上いる場合、選択肢を提示
+            view = ui_components.CharacterSelectView(user_id, saved_characters)
+            await interaction.followup.send("どのキャラクターで冒険を再開しますか？", view=view, ephemeral=True)
+        else:
+            # セーブデータがない場合、新しいキャラクターで開始
+            # この部分は /create コマンドに役割を統合しても良いかもしれません
+            from config import INITIAL_CHARACTER_DATA
+            # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
+            ws_value = custom_world_setting or (world_setting.value if world_setting else "fantasy")
+            character = Character(INITIAL_CHARACTER_DATA)
+            view = ui_components.GameStartView(user_id, character, ws_value)
+            await interaction.followup.send("新しいキャラクターで冒険を始めます。\nGMの性格を選んでください。", embed=game_logic.create_character_embed(character), view=view, ephemeral=True)
 
 @tree.command(name="save", description="現在のゲームの進行状況を保存します。")
 async def save_command(interaction: discord.Interaction):
     user_id = interaction.user.id
-    session = game_manager.get_session(user_id)
-    if session and session.state == 'playing':
-        if save_game(user_id, session.character, session.world_setting):
+    async with game_manager.get_lock(user_id):
+        session = game_manager.get_session(user_id)
+        if session and session.state == 'playing':
+            save_game(user_id, session.character, session.world_setting)
             await interaction.response.send_message("ゲームの進行状況を保存しました。", ephemeral=True)
         else:
-            await interaction.response.send_message("エラーにより保存に失敗しました。", ephemeral=True)
-    else:
-        await interaction.response.send_message("保存できるゲームがありません。", ephemeral=True)
+            await interaction.response.send_message("保存できる進行中のゲームがありません。", ephemeral=True)
 
 @tree.command(name="quit", description="現在のゲームセッションを中断します（進行状況は保存されません）。")
 async def quit_command(interaction: discord.Interaction):
     user_id = interaction.user.id
-    session = game_manager.get_session(user_id)
-    if session:
-        thread_id = session.thread_id
-        game_manager.delete_session(user_id)
-        await interaction.response.send_message("ゲームセッションを終了しました。お疲れ様でした！", ephemeral=True)
-        
-        if thread_id != 0:
-            thread = client.get_channel(thread_id) or await client.fetch_channel(thread_id)
-            if thread and isinstance(thread, discord.Thread):
-                await thread.send("プレイヤーがゲームを中断しました。このスレッドはアーカイブされます。")
-                await thread.edit(archived=True)
-    else:
-        await interaction.response.send_message("終了するゲームがありません。", ephemeral=True)
+    async with game_manager.get_lock(user_id):
+        session = game_manager.get_session(user_id)
+        if session:
+            thread_id = session.thread_id
+            game_manager.delete_session(user_id)
+            await interaction.response.send_message("ゲームセッションを終了しました。お疲れ様でした！", ephemeral=True)
+            
+            if thread_id != 0:
+                thread = client.get_channel(thread_id) or await client.fetch_channel(thread_id)
+                if thread and isinstance(thread, discord.Thread):
+                    await thread.send("プレイヤーがゲームを中断しました。このスレッドはアーカイブされます。")
+                    await thread.edit(archived=True)
+        else:
+            await interaction.response.send_message("終了するゲームがありません。", ephemeral=True)
 
 @tree.command(name="join", description="Botをあなたのいるボイスチャンネルに参加させます。")
 async def join_command(interaction: discord.Interaction):
@@ -243,28 +271,31 @@ async def play_bgm_command(interaction: discord.Interaction, keyword: app_comman
 @app_commands.describe(custom_world_setting="世界観を自由に記述します。こちらが優先されます。")
 async def start_random_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None, custom_world_setting: str = None):
     user_id = interaction.user.id
-    if game_manager.has_session(user_id):
-        await interaction.response.send_message("既にゲームが進行中です。リセットしてやり直す場合は `/reset` を入力してください。", ephemeral=True)
-        return
+    async with game_manager.get_lock(user_id):
+        if game_manager.has_session(user_id):
+            await interaction.response.send_message("既にゲームが進行中です。リセットしてやり直す場合は `/reset` を入力してください。", ephemeral=True)
+            return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
-    ws_value = custom_world_setting or (world_setting.value if world_setting else "一般的なファンタジー世界")
-    ws_name = custom_world_setting or (world_setting.name if world_setting else "一般的なファンタジー世界")
-    await interaction.followup.send(f"AIが「{ws_name}」の世界の新しいキャラクターを創造しています...", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
+        ws_key = custom_world_setting or (world_setting.value if world_setting else "fantasy")
+        # ws_keyがYAMLのキー(fantasyなど)であれば、その名前を取得。カスタム入力ならそのまま表示。
+        world_data = world_data_loader.get(ws_key)
+        ws_name = world_data['name'] if world_data else ws_key
+        await interaction.followup.send(f"AIが「{ws_name}」の世界の新しいキャラクターを創造しています...", ephemeral=True)
 
-    from game_features.ai_handler import get_ai_generated_character
-    random_character_data = get_ai_generated_character(world_setting=ws_value)
+        from game_features.ai_handler import get_ai_generated_character
+        random_character_data = get_ai_generated_character(world_setting_key=ws_key)
 
-    if random_character_data is None:
-        await interaction.followup.send("申し訳ありません、キャラクターの創造に失敗しました。もう一度コマンドを実行してください。", ephemeral=True)
-        return
+        if random_character_data is None:
+            await interaction.followup.send("申し訳ありません、キャラクターの創造に失敗しました。もう一度コマンドを実行してください。", ephemeral=True)
+            return
 
-    character = Character(random_character_data)
-    
-    embed = game_logic.create_character_embed(character)
-    view = ui_components.GameStartView(user_id, character, ws_value)
-    await interaction.followup.send("キャラクターが創造されました！\nGMの性格を選んで、冒険を始めましょう。", embed=embed, view=view, ephemeral=True)
+        character = Character(random_character_data)
+        
+        embed = game_logic.create_character_embed(character)
+        view = ui_components.GameStartView(user_id, character, ws_key)
+        await interaction.followup.send("キャラクターが創造されました！\nGMの性格を選んで、冒険を始めましょう。", embed=embed, view=view, ephemeral=True)
 
 async def item_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     """/use_itemコマンドのオートコンプリートリストを作成する"""
@@ -288,6 +319,17 @@ async def item_autocomplete(interaction: discord.Interaction, current: str) -> l
 async def use_item_command(interaction: discord.Interaction, item: str):
     await game_logic.handle_item_use(interaction, item)
 
+@tree.command(name="inventory", description="所持品を確認・管理します。")
+async def inventory_command(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    session = game_manager.get_session(user_id)
+    if not session:
+        await interaction.response.send_message("ゲームを開始していません。", ephemeral=True)
+        return
+
+    view = inventory_view.InventoryView(user_id)
+    await interaction.response.send_message(embed=view.create_embed(), view=view, ephemeral=True)
+
 async def character_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     """/delete_characterコマンドのオートコンプリートリストを作成する"""
     user_id = interaction.user.id
@@ -300,10 +342,8 @@ async def character_autocomplete(interaction: discord.Interaction, current: str)
 @tree.command(name="delete_character", description="保存されているキャラクターを削除します。")
 @app_commands.autocomplete(character_name=character_autocomplete)
 async def delete_character_command(interaction: discord.Interaction, character_name: str):
-    if delete_character(interaction.user.id, character_name):
-        await interaction.response.send_message(f"キャラクター「{character_name}」のデータを削除しました。", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"キャラクター「{character_name}」が見つかりませんでした。", ephemeral=True)
+    delete_character(interaction.user.id, character_name)
+    await interaction.response.send_message(f"キャラクター「{character_name}」のデータを削除しました。", ephemeral=True)
 
 @tree.command(name="achievements", description="現在のキャラクターの実績達成状況を表示します。")
 async def achievements_command(interaction: discord.Interaction):
@@ -372,22 +412,40 @@ async def reset_difficulty_command(interaction: discord.Interaction):
     # 次のターンから自動計算が再開される
     await interaction.response.send_message("ゲームの難易度を自動調整に戻しました。", ephemeral=True)
 
-# 起動時に各モジュールに必要なグローバル変数を設定
-game_logic.game_manager = game_manager
-ui_components.game_manager = game_manager
-ui_components.setup_and_start_game = game_logic.setup_and_start_game
-ui_components.create_character_embed = game_logic.create_character_embed
-game_logic.client = client
-game_logic.SCENARIO_LOG_CHANNEL_ID = SCENARIO_LOG_CHANNEL_ID
-game_logic.PLAY_LOG_CHANNEL_ID = PLAY_LOG_CHANNEL_ID
-game_logic.build_item_use_prompt = game_features.ai_handler.build_item_use_prompt
-game_logic.build_check_result_prompt = game_features.ai_handler.build_check_result_prompt
-ui_components.client = client
-ui_components.CHAR_SHEET_CHANNEL_ID = CHAR_SHEET_CHANNEL_ID
-ui_components.start_game_turn = game_logic.start_game_turn
-ui_components.build_action_result_prompt = game_features.ai_handler.build_action_result_prompt
-ui_components.handle_skill_check = game_logic.handle_skill_check
-bgm_manager.client = client
+# --- グローバルエラーハンドラ ---
+@tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """
+    スラッシュコマンドの実行中に発生したエラーをここで一元的に処理します。
+    """
+    # エラーの根本原因を取得
+    original_error = getattr(error, 'original', error)
+    
+    # 開発者向けのログ出力
+    logging.exception(f"コマンド '{interaction.command.name}' の実行中にエラーが発生しました: {original_error}")
+
+    # カスタム例外に応じたユーザーへのメッセージ
+    user_message = "予期せぬエラーが発生しました。しばらくしてからもう一度お試しください。" # デフォルトメッセージ
+
+    if isinstance(original_error, FileOperationError):
+        user_message = f"ファイルの処理中にエラーが発生しました。\n詳細: {original_error}"
+    elif isinstance(original_error, CharacterNotFoundError):
+        user_message = f"指定されたデータが見つかりませんでした。\n詳細: {original_error}"
+    elif isinstance(original_error, AIConnectionError):
+        user_message = f"AIとの通信に失敗しました。時間をおいて再度試してください。\n詳細: {original_error}"
+    elif isinstance(original_error, GameError):
+        # その他のゲーム関連エラー
+        user_message = f"エラーが発生しました: {original_error}"
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        user_message = f"コマンドはクールダウン中です。{error.retry_after:.2f}秒後にもう一度試してください。"
+    elif isinstance(error, app_commands.MissingPermissions):
+        user_message = "コマンドの実行に必要な権限がありません。"
+
+    # ephemeral=True をつけて、エラーメッセージが本人にしか見えないようにする
+    if interaction.response.is_done():
+        await interaction.followup.send(user_message, ephemeral=True)
+    else:
+        await interaction.response.send_message(user_message, ephemeral=True)
 
 
 client.run(BOT_TOKEN)

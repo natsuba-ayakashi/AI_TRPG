@@ -3,7 +3,7 @@ import random
 import asyncio
 
 from core.character_manager import Character, get_nested_attr
-from game_features.ai_handler import build_prompt, get_ai_response, generate_image_from_prompt, build_check_result_prompt
+from game_features.ai_handler import get_ai_response, generate_image_from_prompt, build_action_result_prompt
 from game_features import bgm_manager
 from game_features.achievements import ACHIEVEMENTS, check_all_achievements
 from ui.ui_components import ChoiceView, ShopView, SkillCheckView
@@ -37,7 +37,8 @@ def create_character_embed(character: Character) -> discord.Embed:
 
     money = char_data.get('money', 0)
     san_value = char_data.get('san', 'N/A')
-    stats_text = " / ".join([f"{key}:{val}" for key, val in char_data['stats'].items()])
+    # 実効ステータスを表示
+    stats_text = " / ".join([f"{key}:{val}" for key, val in character.get_effective_stats().items()])
     embed.add_field(name=f"所持金: {money}G", value=f"**SAN:** {san_value} | {stats_text}", inline=False)
     
     if char_data['traits']:
@@ -123,7 +124,9 @@ async def handle_item_use(interaction: discord.Interaction, item_name: str):
         await interaction.response.send_message(f"あなたは「{item_name}」を持っていません。", ephemeral=True)
         return
 
-    await interaction.response.defer(thinking=True, ephemeral=True)
+    # 既に defer や response.send_message されている場合があるため、is_done() でチェック
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=True, ephemeral=True)
 
     prompt = build_item_use_prompt(
         character.to_dict(),
@@ -184,7 +187,7 @@ async def handle_skill_check(interaction: discord.Interaction, skill: str, diffi
     await start_game_turn(interaction, character, from_skill_check=True, external_prompt=prompt)
 
 async def check_and_notify_achievements(channel: discord.TextChannel, character: Character, session):
-    """実績の達成をチェックし、アンロックされていれば通知する"""
+    """実績の達成をチェックし、アンロックされていれば通知し、報酬を付与する"""
     newly_unlocked = check_all_achievements(character, session)
     for achievement_id in newly_unlocked:
         character.achievements.append(achievement_id)
@@ -196,6 +199,14 @@ async def check_and_notify_achievements(channel: discord.TextChannel, character:
             color=discord.Color.gold()
         )
         embed.set_thumbnail(url="https://emojipedia-us.s3.amazonaws.com/source/skype/289/trophy_1f3c6.png")
+
+        # 報酬アイテムの処理
+        reward_item = details.get("reward_item")
+        if reward_item:
+            # アイテムをインベントリに追加
+            character.equipment.setdefault("items", []).append(reward_item)
+            embed.add_field(name="報酬獲得！", value=f"特別なアイテム「**{reward_item}**」を手に入れた！", inline=False)
+
         await channel.send(embed=embed)
 
 async def post_play_log(embed: discord.Embed, user: discord.User):
@@ -212,23 +223,14 @@ async def post_play_log(embed: discord.Embed, user: discord.User):
     embed.set_footer(text=f"プレイヤー: {user.display_name}", icon_url=user.display_avatar.url)
     await log_channel.send(embed=embed)
 
-async def start_game_turn(message, character: Character, from_item_use: bool = False, from_skill_check: bool = False, external_prompt: str = None):
-    """ゲームの1ターンを実行し、結果をDiscordに送信する"""
-    user_id = message.author.id
-    session = game_manager.get_session(user_id)
-    if not session:
-        await message.channel.send("エラー: ゲームセッションが見つかりませんでした。")
-        return
-    
-    # 進行度に応じて難易度レベルを更新 (手動設定されていない場合のみ)
-    if not session.is_difficulty_manual:
-        session.difficulty_level = 1 + (len(character.history) // 5)
-
-    gm_key = session.gm_personality or select_gm_personality(character)
+async def _get_ai_response_for_turn(message, session: 'GameSession', from_item_use: bool, from_skill_check: bool, external_prompt: str):
+    """状況に応じてAIから応答を取得し、thinkingメッセージを管理する"""
+    gm_key = session.gm_personality or select_gm_personality(session.character)
+    thinking_message = None
 
     if from_item_use:
-        # アイテム使用からの呼び出しの場合、AI応答は既に取得済み
-        ai_response = session.last_response
+        # アイテム使用からの呼び出しの場合、AI応答は既にセッションに保存済み
+        return session.last_response, None
     elif from_skill_check:
         # 技能判定結果からの呼び出しの場合、新しいプロンプトでAI応答を取得
         prompt = external_prompt
@@ -237,111 +239,109 @@ async def start_game_turn(message, character: Character, from_item_use: bool = F
     else:
         # 通常のターン進行
         await message.channel.send(f"--- 今回のGM: {gm_key} ---")
-        prompt = build_prompt(character.to_dict(), legacy_log=session.legacy_log, gm_personality_key=gm_key, world_setting=session.world_setting, difficulty_level=session.difficulty_level)
+        prompt = build_action_result_prompt(session)
         thinking_message = await message.channel.send("--- AIが物語を紡いでいます... 📜 ---")
         ai_response = get_ai_response(prompt)
 
-    # thinking_messageが定義されている場合のみ操作
-    if 'thinking_message' in locals() and thinking_message:
+    return ai_response, thinking_message
+
+async def _process_and_display_turn_result(message, session: 'GameSession', ai_response: dict, thinking_message):
+    """AIの応答を処理し、結果をDiscordに表示する"""
+    user_id = session.character.owner_id if hasattr(session.character, 'owner_id') else message.author.id
+    character = session.character
+    channel = message.channel
+
+    if thinking_message:
         if ai_response is None:
             await thinking_message.edit(content="申し訳ありません、AIが応答に失敗しました。少し時間をおいて、もう一度選択肢を選び直してください。")
             return
 
         new_chapter_title = ai_response.get("chapter_title")
-        thread = message.channel
-        if new_chapter_title and isinstance(thread, discord.Thread) and thread.name != new_chapter_title:
+        if new_chapter_title and isinstance(channel, discord.Thread) and channel.name != new_chapter_title:
             try:
                 await thinking_message.edit(content=f"--- 物語は新たな章へ: **{new_chapter_title}** ---")
-                await thread.edit(name=new_chapter_title)
+                await channel.edit(name=new_chapter_title)
             except discord.HTTPException as e:
                 print(f"スレッド名の変更中にエラーが発生しました: {e}")
         else:
             await thinking_message.delete()
     elif ai_response is None:
-        # thinking_message がない場合（アイテム使用時など）でAIの応答がない場合
-        await message.channel.send("申し訳ありません、AIが応答に失敗しました。")
+        await channel.send("申し訳ありません、AIが応答に失敗しました。")
         return
 
+    # ゲーム終了判定
     if ai_response.get("game_clear") or ai_response.get("game_over"):
         is_clear = ai_response.get("game_clear", False)
         end_message = "--- 見事、物語を完結させました！ ---" if is_clear else "--- 物語は終わりを告げた ---"
         final_embed = discord.Embed(title="物語の結末", description=ai_response.get("scenario"), color=discord.Color.gold())
         final_embed.set_footer(text=end_message)
-        await message.channel.send(embed=final_embed) # thinking_messageがないので直接送信
+        await channel.send(embed=final_embed)
 
-        if is_clear and "game_clear" not in character.achievements:
-            character.achievements.append("game_clear")
-            # TODO: ゲームクリア実績の通知
-
-        user_id = message.author.id
         if is_clear:
+            if "game_clear" not in character.achievements:
+                character.achievements.append("game_clear")
             save_legacy_log(user_id, character)
 
         if SCENARIO_LOG_CHANNEL_ID and client.get_channel(SCENARIO_LOG_CHANNEL_ID):
             log_channel = client.get_channel(SCENARIO_LOG_CHANNEL_ID)
             await log_channel.send(f"`{character.name}` の冒険が結末を迎えました。", embed=final_embed)
         
-        # ゲーム終了時にBGMを停止し、VCから退出
-        guild = message.channel.guild
-        if guild and guild.voice_client:
-            await bgm_manager.stop_bgm(guild)
-            await guild.voice_client.disconnect()
+        if channel.guild and channel.guild.voice_client:
+            await bgm_manager.stop_bgm(channel.guild)
+            await channel.guild.voice_client.disconnect()
 
-        game_manager.delete_session(user_id) # ゲームセッションを終了
-
-        if isinstance(message.channel, discord.Thread):
-            await message.channel.send("この冒険は終わりを告げました。まもなくこのスレッドはアーカイブされます。")
-            await message.channel.edit(archived=True)
+        game_manager.delete_session(user_id)
+        if isinstance(channel, discord.Thread):
+            await channel.send("この冒険は終わりを告げました。まもなくこのスレッドはアーカイブされます。")
+            await channel.edit(archived=True)
         return
 
     session.last_response = ai_response
 
-    # 技能判定が要求されているかチェック
-    skill_check_data = ai_response.get("skill_check")
-    if skill_check_data:
-        skill = skill_check_data["skill"]
-        difficulty = skill_check_data["difficulty"]
-        check_view = SkillCheckView(user_id, skill, difficulty)
-        await message.channel.send(ai_response["scenario"], view=check_view)
-        return # 判定ボタンが押されるのを待つ
-    
-    view = ChoiceView(user_id=user_id)
-    for i, choice_text in enumerate(ai_response.get("choices", [])):
-        async def button_callback(interaction: discord.Interaction, choice_num=i+1):
-            await view.handle_choice(interaction, choice_num)
-        button = discord.ui.Button(label=f"{i+1}: {choice_text[:75]}", style=discord.ButtonStyle.primary)
-        button.callback = button_callback
-        view.add_item(button)
+    # 技能判定の要求
+    if skill_check_data := ai_response.get("skill_check"):
+        check_view = SkillCheckView(user_id, skill_check_data["skill"], skill_check_data["difficulty"])
+        await channel.send(ai_response["scenario"], view=check_view)
+        return
 
-    # 店が登場した場合、売買用のViewを追加する
-    shop_data = ai_response.get("shop")
-    if shop_data and shop_data.get("items_for_sale"):
+    # 選択肢と店のUI表示
+    gm_key = session.gm_personality or select_gm_personality(character)
+    final_embed = create_scenario_embed(ai_response, gm_key)
+    view = ChoiceView(user_id=user_id)
+    view.add_choices(ai_response.get("choices", []))
+    scenario_message = await channel.send(embed=final_embed, view=view)
+    view.message = scenario_message
+
+    if shop_data := ai_response.get("shop"):
         shop_embed = discord.Embed(title=f"ようこそ、{shop_data.get('name', '店')}へ！", description="ご用件は？", color=discord.Color.gold())
-        shop_view = ShopView(user_id=user_id, shop_data=shop_data, character=session.character)
+        shop_view = ShopView(user_id=user_id, shop_data=shop_data, character=character)
         shop_message = await channel.send(embed=shop_embed, view=shop_view)
         shop_view.message = shop_message
 
-    # まず画像なしのEmbedを作成して送信
-    channel = message.channel if isinstance(message, discord.Message) else message.channel
-    final_embed = create_scenario_embed(ai_response, gm_key)
-    scenario_message = await channel.send(embed=final_embed, view=view) # ChoiceViewを持つメッセージ
-    view.message = scenario_message
-
-    # 画像生成を非同期で実行
-    image_prompt = ai_response.get("image_prompt")
-    if image_prompt:
+    # 画像生成とBGM更新
+    if image_prompt := ai_response.get("image_prompt"):
         image_url = await asyncio.to_thread(generate_image_from_prompt, image_prompt)
         if image_url:
-            # 画像が見つかったらEmbedを更新してメッセージを編集
-            final_embed = create_scenario_embed(ai_response, gm_key, image_url)
+            final_embed.set_image(url=image_url)
             await scenario_message.edit(embed=final_embed)
     
-    # 最終的なEmbedをログとして投稿
     await post_play_log(embed=final_embed, user=message.author)
-
-    # ターン終了時に実績をチェック
     await check_and_notify_achievements(channel, character, session)
+    await bgm_manager.update_bgm_for_session(session, ai_response.get("bgm_keyword"))
 
-    # BGMを更新
-    if ai_response:
-        await bgm_manager.update_bgm_for_session(session, ai_response.get("bgm_keyword"))
+async def start_game_turn(message, character: Character, from_item_use: bool = False, from_skill_check: bool = False, external_prompt: str = None):
+    """ゲームの1ターンを実行する司令塔となる関数"""
+    user_id = message.author.id if hasattr(message, 'author') else message.user.id
+    session = game_manager.get_session(user_id)
+    if not session:
+        await message.channel.send("エラー: ゲームセッションが見つかりませんでした。")
+        return
+    
+    if not session.is_difficulty_manual:
+        session.difficulty_level = 1 + (len(character.history) // 5)
+
+    # 1. AIからの応答を取得
+    ai_response, thinking_message = await _get_ai_response_for_turn(message, session, from_item_use, from_skill_check, external_prompt)
+
+    # 2. AIの応答を処理し、結果を表示
+    await _process_and_display_turn_result(message, session, ai_response, thinking_message)

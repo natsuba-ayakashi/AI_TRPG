@@ -253,6 +253,15 @@ class ChoiceView(View):
             self.timeout = 300
             await self.message.edit(view=self)
 
+    def add_choices(self, choices: list[str]):
+        """AIから受け取った選択肢をボタンとしてViewに追加する"""
+        for i, choice_text in enumerate(choices):
+            # ラムダ式や部分適用でコールバックに引数を渡す
+            async def button_callback(interaction: discord.Interaction, choice_num=i+1):
+                await self.handle_choice(interaction, choice_num)
+            button = discord.ui.Button(label=f"{i+1}: {choice_text[:75]}", style=discord.ButtonStyle.primary)
+            button.callback = button_callback
+            self.add_item(button)
 
 class ShopView(View):
     """店のUIを管理するためのView"""

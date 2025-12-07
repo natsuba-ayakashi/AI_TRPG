@@ -1,5 +1,6 @@
 import discord
 import asyncio
+from collections import defaultdict
 from typing import Optional
 
 # BGMのキーワードとファイルパスのマッピング
@@ -14,6 +15,7 @@ BGM_MAP = {
 
 currently_playing = {} # guild_id: "keyword"
 volume_settings = {}   # guild_id: float (0.0 to 2.0)
+guild_locks = defaultdict(asyncio.Lock) # guild_id: asyncio.Lock
 
 async def play_bgm(vc: discord.VoiceClient, file_path: str):
     """指定された音声ファイルをループ再生する"""
@@ -132,20 +134,21 @@ async def force_play(guild: discord.Guild, keyword: str) -> tuple[bool, str]:
     if keyword not in BGM_MAP:
         return False, f"指定されたBGMキーワード「{keyword}」は存在しません。"
 
-    vc = guild.voice_client
-    if not vc or not vc.is_connected():
-        return False, "Botはボイスチャンネルに参加していません。"
+    async with guild_locks[guild.id]:
+        vc = guild.voice_client
+        if not vc or not vc.is_connected():
+            return False, "Botはボイスチャンネルに参加していません。"
 
-    file_path = BGM_MAP[keyword]
-    
-    # 同じ曲が再生中の場合でも、最初から再生し直す
-    print(f"BGMを手動で変更します: {keyword} -> {file_path}")
-    await play_bgm(vc, file_path)
-    
-    # 再生状態を更新
-    currently_playing[guild.id] = keyword
-    
-    return True, f"BGMを「{keyword.capitalize()}」に変更しました。"
+        file_path = BGM_MAP[keyword]
+        
+        # 同じ曲が再生中の場合でも、最初から再生し直す
+        print(f"BGMを手動で変更します: {keyword} -> {file_path}")
+        await play_bgm(vc, file_path)
+        
+        # 再生状態を更新
+        currently_playing[guild.id] = keyword
+        
+        return True, f"BGMを「{keyword.capitalize()}」に変更しました。"
 
 async def update_bgm_for_session(session, bgm_keyword: Optional[str]):
     """セッションの状態に基づいてBGMを更新する"""
@@ -156,18 +159,19 @@ async def update_bgm_for_session(session, bgm_keyword: Optional[str]):
     # 適切なBGMファイルを選択
     keyword = bgm_keyword if bgm_keyword in BGM_MAP else "default"
     
-    # 同じBGMが既に再生中なら何もしない
-    if currently_playing.get(guild.id) == keyword:
-        return
+    async with guild_locks[guild.id]:
+        # 同じBGMが既に再生中なら何もしない
+        if currently_playing.get(guild.id) == keyword:
+            return
 
-    file_path = BGM_MAP[keyword]
+        file_path = BGM_MAP[keyword]
 
-    # ボイスクライアントを取得
-    vc = guild.voice_client
-    if not vc or not vc.is_connected():
-        print("BGM再生エラー: ボットがボイスチャンネルに接続していません。")
-        return
+        # ボイスクライアントを取得
+        vc = guild.voice_client
+        if not vc or not vc.is_connected():
+            print("BGM再生エラー: ボットがボイスチャンネルに接続していません。")
+            return
 
-    print(f"BGMを変更します: {keyword} -> {file_path}")
-    await play_bgm(vc, file_path)
-    currently_playing[guild.id] = keyword
+        print(f"BGMを変更します: {keyword} -> {file_path}")
+        await play_bgm(vc, file_path)
+        currently_playing[guild.id] = keyword
