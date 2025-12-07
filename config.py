@@ -13,5 +13,6 @@ INITIAL_CHARACTER_DATA = {
     "equipment": {
         "weapon": "剣", "armor": "革鎧", "items": ["ポーション", "地図"]
     },
-    "history": []
+    "history": [],
+    "money": 100 # 初期所持金
 }

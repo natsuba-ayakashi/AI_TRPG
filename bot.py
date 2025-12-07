@@ -6,38 +6,30 @@ import random
 import asyncio
 from dotenv import load_dotenv
 
-from character_manager import Character
-from ai_handler import get_ai_generated_character
-from game_state import save_game, load_game, save_legacy_log, load_legacy_log
+from core.character_manager import Character, get_nested_attr
+from core.game_manager import GameManager
+from core.game_state import save_game, list_characters, delete_character, save_legacy_log, load_legacy_log
+from game_features.achievements import ACHIEVEMENTS
 from config import INITIAL_CHARACTER_DATA
-import ui_components
-import game_logic
+from game_features import bgm_manager
+from ui import ui_components
+from game_features import game_logic
 
 # --- 初期設定 ---
 load_dotenv()
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHAR_SHEET_CHANNEL_ID = int(os.getenv("CHAR_SHEET_CHANNEL_ID", 0))
 SCENARIO_LOG_CHANNEL_ID = int(os.getenv("SCENARIO_LOG_CHANNEL_ID", 0))
+PLAY_LOG_CHANNEL_ID = int(os.getenv("PLAY_LOG_CHANNEL_ID", 0))
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.voice_states = True # ボイスチャットの権限
 client = discord.Client(intents=intents) # Clientの定義
 tree = discord.app_commands.CommandTree(client) # CommandTreeをClientに紐付け
 
-# 複数プレイヤーのゲームセッションを管理する辞書
-game_sessions = {}
-
-@tree.command(name="create", description="あなただけのオリジナルキャラクターを作成して冒険を始めます。")
-@app_commands.choices(world_setting=WORLD_SETTING_CHOICES)
-async def create_character_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None):
-    user_id = interaction.user.id
-    if user_id in game_sessions:
-        await interaction.response.send_message("既にゲームが進行中です。新しいキャラクターで始めるには、まず `/quit` で現在のゲームを終了してください。", ephemeral=True)
-        return
-    
-    ws_value = world_setting.value if world_setting else "一般的なファンタジー世界"
-    modal = ui_components.CharacterCreationModal(world_setting=ws_value)
-    await interaction.response.send_modal(modal)
+# ゲームセッションを管理するGameManagerのインスタンス
+game_manager = GameManager()
 
 @client.event
 async def on_ready():
@@ -45,6 +37,28 @@ async def on_ready():
     # スラッシュコマンドをDiscordに同期
     await tree.sync()
     print("スラッシュコマンドを同期しました。")
+
+@client.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    """ボイスチャンネルの状態が変化したときに呼び出されるイベント"""
+    # ボット自身の状態変化は無視
+    if member.id == client.user.id:
+        return
+
+    voice_client = member.guild.voice_client
+    # ボットがボイスチャンネルに接続していない場合は何もしない
+    if not voice_client:
+        return
+
+    # ボットがいるチャンネルのメンバーがボット自身だけになった場合
+    if len(voice_client.channel.members) == 1 and voice_client.channel.members[0] == client.user:
+        # 60秒待ってから再度チェック
+        await asyncio.sleep(60)
+        # 再度チェックしてもボットだけの場合
+        if len(voice_client.channel.members) == 1:
+            print("ボイスチャンネルに誰もいなくなったため、自動的に退出します。")
+            await bgm_manager.stop_bgm(member.guild)
+            await voice_client.disconnect()
 
 WORLD_SETTING_CHOICES = [
     app_commands.Choice(name="一般的なファンタジー世界", value="一般的なファンタジー世界"),
@@ -54,34 +68,52 @@ WORLD_SETTING_CHOICES = [
     app_commands.Choice(name="スチームパンク", value="蒸気機関と歯車が支配するスチームパンク世界"),
 ]
 
+@tree.command(name="create", description="あなただけのオリジナルキャラクターを作成して冒険を始めます。")
+@app_commands.choices(world_setting=WORLD_SETTING_CHOICES)
+@app_commands.describe(custom_world_setting="世界観を自由に記述します。こちらが優先されます。")
+async def create_character_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None, custom_world_setting: str = None):
+    user_id = interaction.user.id
+    if game_manager.has_session(user_id):
+        await interaction.response.send_message("既にゲームが進行中です。新しいキャラクターで始めるには、まず `/quit` で現在のゲームを終了してください。", ephemeral=True)
+        return
+    
+    # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
+    ws_value = custom_world_setting or (world_setting.value if world_setting else "一般的なファンタジー世界")
+    modal = ui_components.CharacterCreationModal(world_setting=ws_value)
+    await interaction.response.send_modal(modal)
+
 @tree.command(name="start", description="新しい冒険を開始、または中断した冒険を再開します。")
 @app_commands.choices(world_setting=WORLD_SETTING_CHOICES)
-async def start_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None):
+@app_commands.describe(custom_world_setting="世界観を自由に記述します。こちらが優先されます。")
+async def start_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None, custom_world_setting: str = None):
     user_id = interaction.user.id
-    if user_id in game_sessions:
+    if game_manager.has_session(user_id):
         await interaction.response.send_message("既にゲームが進行中です。リセットしてやり直す場合は `/reset` を入力してください。", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    saved_character = load_game(user_id)
-    if saved_character:
-        game_sessions[user_id] = {
-            'character': saved_character,
-            'state': 'confirming_new_game',
-            'legacy_log': load_legacy_log(user_id)
-            # world_settingは保存されたものを使うので、ここでは設定しない
-        }
-        await interaction.followup.send("セーブデータが見つかりました。このチャンネルで続きから始めますか？ (`yes` / `no` と発言してください)", ephemeral=True)
+    saved_characters = list_characters(user_id)
+    if saved_characters:
+        # 保存されたキャラクターが1人以上いる場合、選択肢を提示
+        view = ui_components.CharacterSelectView(user_id, saved_characters)
+        await interaction.followup.send("どのキャラクターで冒険を再開しますか？", view=view, ephemeral=True)
     else:
+        # セーブデータがない場合、新しいキャラクターで開始
+        # この部分は /create コマンドに役割を統合しても良いかもしれません
+        from config import INITIAL_CHARACTER_DATA
         character = Character(INITIAL_CHARACTER_DATA)
-        await game_logic.setup_and_start_game(interaction, character, is_new_game=True, world_setting=world_setting.value if world_setting else "一般的なファンタジー世界")
+        # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
+        ws_value = custom_world_setting or (world_setting.value if world_setting else "一般的なファンタジー世界")
+        view = ui_components.GameStartView(user_id, character, ws_value)
+        await interaction.followup.send("新しいキャラクターで冒険を始めます。\nGMの性格を選んでください。", embed=game_logic.create_character_embed(character), view=view, ephemeral=True)
 
 @tree.command(name="save", description="現在のゲームの進行状況を保存します。")
 async def save_command(interaction: discord.Interaction):
     user_id = interaction.user.id
-    if user_id in game_sessions and game_sessions[user_id]['state'] == 'playing':
-        if save_game(user_id, game_sessions[user_id]['character']):
+    session = game_manager.get_session(user_id)
+    if session and session.state == 'playing':
+        if save_game(user_id, session.character, session.world_setting):
             await interaction.response.send_message("ゲームの進行状況を保存しました。", ephemeral=True)
         else:
             await interaction.response.send_message("エラーにより保存に失敗しました。", ephemeral=True)
@@ -91,78 +123,271 @@ async def save_command(interaction: discord.Interaction):
 @tree.command(name="quit", description="現在のゲームセッションを中断します（進行状況は保存されません）。")
 async def quit_command(interaction: discord.Interaction):
     user_id = interaction.user.id
-    if user_id in game_sessions:
-        del game_sessions[user_id]
-        await interaction.response.send_message("ゲームセッションを終了しました。お疲れ様でした！")
+    session = game_manager.get_session(user_id)
+    if session:
+        thread_id = session.thread_id
+        game_manager.delete_session(user_id)
+        await interaction.response.send_message("ゲームセッションを終了しました。お疲れ様でした！", ephemeral=True)
+        
+        if thread_id != 0:
+            thread = client.get_channel(thread_id) or await client.fetch_channel(thread_id)
+            if thread and isinstance(thread, discord.Thread):
+                await thread.send("プレイヤーがゲームを中断しました。このスレッドはアーカイブされます。")
+                await thread.edit(archived=True)
     else:
         await interaction.response.send_message("終了するゲームがありません。", ephemeral=True)
 
+@tree.command(name="join", description="Botをあなたのいるボイスチャンネルに参加させます。")
+async def join_command(interaction: discord.Interaction):
+    voice_state = interaction.user.voice
+    if voice_state is None:
+        await interaction.response.send_message("先にボイスチャンネルに参加してください。", ephemeral=True)
+        return
+
+    voice_channel = voice_state.channel
+    if interaction.guild.voice_client is not None:
+        # 既に他のチャンネルにいる場合は移動
+        await interaction.guild.voice_client.move_to(voice_channel)
+    else:
+        # どこにもいない場合は接続
+        await voice_channel.connect()
+    
+    await interaction.response.send_message(f"`{voice_channel.name}` に参加しました。", ephemeral=True)
+
+@tree.command(name="leave", description="Botをボイスチャンネルから退出させます。")
+async def leave_command(interaction: discord.Interaction):
+    if interaction.guild.voice_client is None:
+        await interaction.response.send_message("Botはボイスチャンネルに参加していません。", ephemeral=True)
+        return
+    await interaction.guild.voice_client.disconnect()
+    await interaction.response.send_message("ボイスチャンネルから退出しました。", ephemeral=True)
+
+@tree.command(name="volume", description="BGMの音量を調整します（0-200%）。")
+@app_commands.describe(level="音量レベル (0-200)")
+async def volume_command(interaction: discord.Interaction, level: app_commands.Range[int, 0, 200]):
+    success, message = await bgm_manager.set_volume(interaction.guild, level)
+    if success:
+        await interaction.response.send_message(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(f"エラー: {message}", ephemeral=True)
+
+@tree.command(name="pause", description="BGMを一時停止します。")
+async def pause_command(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    success, message = await bgm_manager.pause_bgm(interaction.guild)
+    await interaction.response.send_message(message, ephemeral=True)
+
+@tree.command(name="resume", description="一時停止中のBGMを再生します。")
+async def resume_command(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    success, message = await bgm_manager.resume_bgm(interaction.guild)
+    await interaction.response.send_message(message, ephemeral=True)
+
+@tree.command(name="stop", description="BGMの再生を停止します。")
+async def stop_command(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    success, message = await bgm_manager.stop_bgm(interaction.guild)
+
+    # BGM停止に成功した場合、ボイスチャンネルから退出する
+    if success and interaction.guild.voice_client:
+        await interaction.guild.voice_client.disconnect()
+        message += "\nボイスチャンネルから退出しました。"
+
+    await interaction.response.send_message(message, ephemeral=True)
+
+@tree.command(name="nowplaying", description="現在再生中のBGM情報を表示します。")
+async def nowplaying_command(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
+        return
+
+    status = bgm_manager.get_bgm_status(interaction.guild)
+
+    if not status:
+        await interaction.response.send_message("Botはボイスチャンネルに参加していません。", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="🎵 現在のBGM情報", color=discord.Color.blue())
+
+    if status["is_playing"] or status["is_paused"]:
+        song_name = status["keyword"].capitalize() if status["keyword"] else "不明な曲"
+        state = "再生中" if status["is_playing"] else "一時停止中"
+        embed.add_field(name="曲名", value=song_name, inline=False)
+        embed.add_field(name="状態", value=state, inline=True)
+        embed.add_field(name="音量", value=f"{status['volume']}%", inline=True)
+    else:
+        embed.description = "現在再生中の曲はありません。"
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@tree.command(name="play_bgm", description="指定したBGMを再生します。")
+@app_commands.choices(keyword=[
+    app_commands.Choice(name=key.capitalize(), value=key) for key in bgm_manager.BGM_MAP.keys()
+])
+async def play_bgm_command(interaction: discord.Interaction, keyword: app_commands.Choice[str]):
+    if not interaction.guild:
+        await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
+        return
+
+    success, message = await bgm_manager.force_play(interaction.guild, keyword.value)
+    await interaction.response.send_message(message, ephemeral=True)
 
 @tree.command(name="start_random", description="AIが生成したランダムなキャラクターで新しい冒険を開始します。")
 @app_commands.choices(world_setting=WORLD_SETTING_CHOICES)
-async def start_random_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None):
+@app_commands.describe(custom_world_setting="世界観を自由に記述します。こちらが優先されます。")
+async def start_random_command(interaction: discord.Interaction, world_setting: app_commands.Choice[str] = None, custom_world_setting: str = None):
     user_id = interaction.user.id
-    if user_id in game_sessions:
+    if game_manager.has_session(user_id):
         await interaction.response.send_message("既にゲームが進行中です。リセットしてやり直す場合は `/reset` を入力してください。", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True) # 本人にだけ「考え中」と表示
-    await interaction.followup.send(f"AIが「{world_setting.name}」の世界の新しいキャラクターを創造しています...", ephemeral=True) # 処理中であることを伝える
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    # カスタム設定が入力されていればそれを使い、なければ選択肢を使う
+    ws_value = custom_world_setting or (world_setting.value if world_setting else "一般的なファンタジー世界")
+    ws_name = custom_world_setting or (world_setting.name if world_setting else "一般的なファンタジー世界")
+    await interaction.followup.send(f"AIが「{ws_name}」の世界の新しいキャラクターを創造しています...", ephemeral=True)
 
-    # AIにキャラクターを生成させる
-    ws_value = world_setting.value if world_setting else "一般的なファンタジー世界"
-    random_character_data = get_ai_generated_character(ws_value)
+    from game_features.ai_handler import get_ai_generated_character
+    random_character_data = get_ai_generated_character(world_setting=ws_value)
 
     if random_character_data is None:
         await interaction.followup.send("申し訳ありません、キャラクターの創造に失敗しました。もう一度コマンドを実行してください。", ephemeral=True)
         return
 
     character = Character(random_character_data)
-    await game_logic.setup_and_start_game(interaction, character, is_new_game=True, world_setting=ws_value)
+    
+    embed = game_logic.create_character_embed(character)
+    view = ui_components.GameStartView(user_id, character, ws_value)
+    await interaction.followup.send("キャラクターが創造されました！\nGMの性格を選んで、冒険を始めましょう。", embed=embed, view=view, ephemeral=True)
 
-@client.event
-async def on_message(message):
-    # Bot自身のメッセージは無視
-    if message.author == client.user:
+async def item_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """/use_itemコマンドのオートコンプリートリストを作成する"""
+    user_id = interaction.user.id
+    session = game_manager.get_session(user_id)
+    if not session:
+        return []
+    
+    # equipment['items'] が存在するか確認
+    items = get_nested_attr(session.character.equipment, 'items', [])
+    if not items:
+        return []
+
+    return [
+        app_commands.Choice(name=item, value=item)
+        for item in items if current.lower() in item.lower()
+    ]
+
+@tree.command(name="use_item", description="インベントリのアイテムを使用します。")
+@app_commands.autocomplete(item=item_autocomplete)
+async def use_item_command(interaction: discord.Interaction, item: str):
+    await game_logic.handle_item_use(interaction, item)
+
+async def character_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """/delete_characterコマンドのオートコンプリートリストを作成する"""
+    user_id = interaction.user.id
+    characters = list_characters(user_id)
+    return [
+        app_commands.Choice(name=name, value=name)
+        for name in characters if current.lower() in name.lower()
+    ]
+
+@tree.command(name="delete_character", description="保存されているキャラクターを削除します。")
+@app_commands.autocomplete(character_name=character_autocomplete)
+async def delete_character_command(interaction: discord.Interaction, character_name: str):
+    if delete_character(interaction.user.id, character_name):
+        await interaction.response.send_message(f"キャラクター「{character_name}」のデータを削除しました。", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"キャラクター「{character_name}」が見つかりませんでした。", ephemeral=True)
+
+@tree.command(name="achievements", description="現在のキャラクターの実績達成状況を表示します。")
+async def achievements_command(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    session = game_manager.get_session(user_id)
+    if not session:
+        await interaction.response.send_message("実績を表示するゲームセッションがありません。", ephemeral=True)
         return
 
-    user_id = message.author.id
+    character = session.character
+    unlocked_ids = set(character.achievements)
 
-    # ゲームが進行中のプレイヤーからのメッセージを処理
-    if user_id in game_sessions:
-        try:
-            # `!start`後の確認応答のみを処理する
-            if game_sessions[user_id].get('state') == 'confirming_new_game':
-                character = game_sessions[user_id]['character']
-                if message.content.lower() in ['yes', 'y']:
-                    game_sessions[user_id]['state'] = 'playing'
-                    # 保存された世界観を使う
-                    world_setting = game_sessions[user_id].get('world_setting', '一般的なファンタジー世界')
-                    await game_logic.setup_and_start_game(message, character, is_new_game=False, world_setting=world_setting)
+    embed = discord.Embed(
+        title=f"{character.name}の実績",
+        description=f"達成率: {len(unlocked_ids)} / {len(ACHIEVEMENTS)}",
+        color=discord.Color.dark_gold()
+    )
 
-                elif message.content.lower() in ['no', 'n']:
-                    # レガシーログは引き継ぐ
-                    legacy_log = game_sessions[user_id].get('legacy_log')
-                    # 新しい世界観を使う
-                    world_setting = game_sessions[user_id].get('world_setting', '一般的なファンタジー世界')
-                    new_character = Character(INITIAL_CHARACTER_DATA)
-                    game_sessions[user_id] = {'character': new_character, 'state': 'playing', 'legacy_log': legacy_log}
-                    await game_logic.setup_and_start_game(message, new_character, is_new_game=True, world_setting=world_setting)
-                else:
-                    await message.channel.send("`yes` または `no` でお答えください。")
+    for achievement_id, details in ACHIEVEMENTS.items():
+        if achievement_id in unlocked_ids:
+            embed.add_field(name=f"🏆 {details['name']}", value=details['description'], inline=False)
+        elif not details.get("hidden", False):
+            embed.add_field(name=f"🔒 {details['name']}", value=details['description'], inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        except (ValueError, KeyError):
-            # 数字以外の入力や予期せぬエラーは無視（あるいはヘルプメッセージを出す）
-            pass
+@tree.command(name="set_image", description="キャラクターのカスタム画像を設定します。")
+@app_commands.describe(image="キャラクターとして設定する画像ファイル")
+async def set_image_command(interaction: discord.Interaction, image: discord.Attachment):
+    user_id = interaction.user.id
+    session = game_manager.get_session(user_id)
+    if not session:
+        await interaction.response.send_message("画像を登録するゲームセッションがありません。", ephemeral=True)
+        return
+
+    # 画像が実際に画像ファイルか簡易チェック
+    if not image.content_type or not image.content_type.startswith("image/"):
+        await interaction.response.send_message("画像ファイル（PNG, JPGなど）をアップロードしてください。", ephemeral=True)
+        return
+
+    session.character.custom_image_url = image.url
+    await interaction.response.send_message("キャラクター画像を設定しました！", embed=game_logic.create_character_embed(session.character), ephemeral=True)
+
+@tree.command(name="set_difficulty", description="ゲームの難易度を手動で設定します（自動調整が無効になります）。")
+@app_commands.describe(level="難易度レベル (1-10)")
+async def set_difficulty_command(interaction: discord.Interaction, level: app_commands.Range[int, 1, 10]):
+    user_id = interaction.user.id
+    session = game_manager.get_session(user_id)
+    if not session:
+        await interaction.response.send_message("難易度を設定するゲームセッションがありません。", ephemeral=True)
+        return
+
+    session.difficulty_level = level
+    session.is_difficulty_manual = True
+    await interaction.response.send_message(f"ゲームの難易度をレベル **{level}** に設定しました。\n今後の難易度は自動調整されません。", ephemeral=True)
+
+@tree.command(name="reset_difficulty", description="ゲームの難易度を進行度に応じた自動調整に戻します。")
+async def reset_difficulty_command(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    session = game_manager.get_session(user_id)
+    if not session:
+        await interaction.response.send_message("難易度をリセットするゲームセッションがありません。", ephemeral=True)
+        return
+
+    session.is_difficulty_manual = False
+    # 次のターンから自動計算が再開される
+    await interaction.response.send_message("ゲームの難易度を自動調整に戻しました。", ephemeral=True)
 
 # 起動時に各モジュールに必要なグローバル変数を設定
-game_logic.game_sessions = game_sessions
-ui_components.game_sessions = game_sessions
+game_logic.game_manager = game_manager
+ui_components.game_manager = game_manager
 ui_components.setup_and_start_game = game_logic.setup_and_start_game
 ui_components.create_character_embed = game_logic.create_character_embed
 game_logic.client = client
 game_logic.SCENARIO_LOG_CHANNEL_ID = SCENARIO_LOG_CHANNEL_ID
+game_logic.PLAY_LOG_CHANNEL_ID = PLAY_LOG_CHANNEL_ID
+game_logic.build_item_use_prompt = game_features.ai_handler.build_item_use_prompt
+game_logic.build_check_result_prompt = game_features.ai_handler.build_check_result_prompt
 ui_components.client = client
 ui_components.CHAR_SHEET_CHANNEL_ID = CHAR_SHEET_CHANNEL_ID
+ui_components.start_game_turn = game_logic.start_game_turn
+ui_components.build_action_result_prompt = game_features.ai_handler.build_action_result_prompt
+ui_components.handle_skill_check = game_logic.handle_skill_check
+bgm_manager.client = client
+
 
 client.run(BOT_TOKEN)
