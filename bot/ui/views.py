@@ -199,6 +199,26 @@ class CharacterCreationView(ui.View):
             # Use the already finalized character_data
             character_obj = await self.bot.character_service.create_character(self.author.id, self.character_data)
             await interaction.response.edit_message(content=f"キャラクター「{character_obj.name}」を作成しました！", view=None, embed=None)
+
+            # # 画像生成機能が有効な場合、キャラクターの立ち絵を生成する
+            # if self.bot.game_service.images.is_enabled():
+            #     prompt = f"full body portrait of a fantasy character, {character_obj.race}, {character_obj.class_}, {character_obj.appearance}"
+            #     try:
+            #         image_data = await self.bot.game_service.images.generate_image_from_text(prompt)
+            #         if image_data:
+            #             file = discord.File(image_data, filename=f"{character_obj.name}_portrait.png")
+            #             char_sheet_channel_id = self.bot.CHAR_SHEET_CHANNEL_ID
+            #             channel = self.bot.get_channel(char_sheet_channel_id)
+            #             
+            #             embed = create_character_embed(character_obj)
+            #             
+            #             if channel and isinstance(channel, discord.TextChannel):
+            #                 await channel.send(f"新しい冒険者「{character_obj.name}」が誕生しました。", embed=embed, file=file)
+            #                 await interaction.followup.send(f"キャラクターシートと立ち絵を {channel.mention} に投稿しました。", ephemeral=True)
+            #             else:
+            #                 await interaction.followup.send("キャラクターシート投稿チャンネルが見つかりませんでした。", ephemeral=True)
+            #     except Exception as img_e:
+            #         await interaction.followup.send(f"立ち絵の生成中にエラーが発生しました: {img_e}", ephemeral=True)
         except Exception as e:
             await interaction.response.edit_message(content=f"作成エラー: {e}", view=None, embed=None)
         self.stop()

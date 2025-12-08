@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Dict, Any
-import httpx
 import json
+import google.generativeai as genai
 
 from core.errors import AIConnectionError
 
@@ -14,10 +14,9 @@ class AIService:
     ゲームマスター(GM)としての応答を生成します。
     """
     def __init__(self, api_key: str, model_name: str, world_data_loader: "WorldDataLoader"):
-        self.api_key = api_key
+        genai.configure(api_key=api_key)
         self.model_name = model_name
         self.world_data = world_data_loader.get('fantasy_world') # 'fantasy_world.json' を読み込む
-        self.http_client = httpx.AsyncClient(timeout=60.0)
 
     def _build_system_prompt(self, session: "GameSession") -> str:
         """AIに与える役割や背景情報を定義するシステムプロンプトを構築する。"""
@@ -120,37 +119,38 @@ class AIService:
     def _build_messages(self, session: "GameSession", user_input: str) -> list[dict]:
         """AIに送信するメッセージのリストを構築する。"""
         messages = [{"role": "system", "content": self._build_system_prompt(session)}]
-        
+        history = []
         # 過去の対話履歴を追加
         for entry in session.conversation_history:
-            messages.append(entry)
+            # Geminiのロールは 'user' と 'model'
+            role = "model" if entry["role"] == "assistant" else entry["role"]
+            history.append({"role": role, "parts": [entry["content"]]})
             
         # 今回のプレイヤーの行動を追加
-        messages.append({"role": "user", "content": user_input})
+        history.append({"role": "user", "parts": [user_input]})
         
-        return messages
+        return history
 
     async def generate_game_response(self, session: "GameSession", user_input: str) -> Dict[str, Any]:
         """
         プレイヤーの入力に基づき、AIからゲームの応答を生成します。
         """
-        messages = self._build_messages(session, user_input)
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "response_format": {"type": "json_object"}
-        }
+        system_prompt = self._build_system_prompt(session)
+        history = self._build_messages(session, user_input)
+
+        model = genai.GenerativeModel(
+            self.model_name,
+            system_instruction=system_prompt,
+            generation_config=genai.types.GenerationConfig(
+                response_mime_type="application/json"
+            )
+        )
 
         try:
-            response = await self.http_client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-            response.raise_for_status()
+            # 会話履歴を使って応答を生成
+            chat_session = model.start_chat(history=history[:-1]) # 最後のユーザー入力を除く
+            response = await chat_session.send_message_async(history[-1]["parts"])
             
-            ai_response_data = response.json()
-            return json.loads(ai_response_data['choices'][0]['message']['content'])
-        except (httpx.HTTPStatusError, json.JSONDecodeError, KeyError) as e:
+            return json.loads(response.text)
+        except Exception as e:
             raise AIConnectionError(f"AIからの応答生成に失敗しました: {e}") from e

@@ -170,13 +170,11 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
         inventory = session.character.inventory
         return [app_commands.Choice(name=item, value=item) for item in inventory if current.lower() in item.lower()][:25]
 
-
 async def _character_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
     """キャラクター名をオートコンプリートするための共通メソッド"""
     bot: "MyBot" = interaction.client
     char_names = await bot.character_service.get_all_character_names(interaction.user.id)
     return [app_commands.Choice(name=name, value=name) for name in char_names if current.lower() in name.lower()][:25]
-
 
 async def setup(bot: "MyBot"):
     cog = GameCommandsCog(bot)

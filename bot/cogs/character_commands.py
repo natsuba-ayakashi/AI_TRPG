@@ -4,7 +4,7 @@ from discord import app_commands
 from typing import TYPE_CHECKING, Optional
 
 from game.models.character import Character
-from bot.ui.embeds import create_character_embed
+from bot.ui.embeds import create_character_embed, create_journal_embed
 from bot.ui.views import CharacterCreationView, CharacterSelectView, LevelUpView
 from bot import messaging
 
@@ -83,6 +83,19 @@ class CharacterCommandsCog(commands.Cog, name="キャラクター管理"):
             if leveled_up:
                 message += f"\n\n**レベルアップ！** レベルが {session.character.level} になりました！\n`/levelup` コマンドでキャラクターを強化してください。"
             await interaction.response.send_message(message, ephemeral=True)
+
+    # --- ジャーナル確認 ---
+    @app_commands.command(name="journal", description="冒険日誌（クエスト一覧）を表示します。")
+    async def journal(self, interaction: discord.Interaction):
+        """現在受注しているクエストや完了したクエストの一覧を表示する"""
+        session = self.bot.game_service.get_session(interaction.user.id)
+        if not session:
+            await interaction.response.send_message(messaging.MSG_SESSION_REQUIRED, ephemeral=True)
+            return
+
+        all_quests_data = self.bot.world_data_loader.get('quests')
+        embed = create_journal_embed(session.character, all_quests_data)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: "MyBot"):
