@@ -1,0 +1,96 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+import logging
+from pathlib import Path
+import asyncio
+
+from core.errors import GameError, FileOperationError, CharacterNotFoundError, AIConnectionError
+
+# --- 型チェック用の前方参照 ---
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from game.services.game_service import GameService
+    from game.services.character_service import CharacterService
+    from infrastructure.data_loaders.world_data_loader import WorldDataLoader
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.voice_states = True
+
+class MyBot(commands.Bot):
+    """プロジェクトのカスタムBotクラス"""
+    def __init__(
+        self,
+        channel_ids: dict[str, int],
+    ):
+        super().__init__(command_prefix="!", intents=intents, case_insensitive=True)
+        # 依存性注入によって後から設定されるプロパティ
+        self.game_service: "GameService" = None
+        self.character_service: "CharacterService" = None
+        self.world_data_loader: "WorldDataLoader" = None
+
+        # 設定値
+        self.CHAR_SHEET_CHANNEL_ID = channel_ids.get("CHAR_SHEET_CHANNEL_ID", 0)
+        self.SCENARIO_LOG_CHANNEL_ID = channel_ids.get("SCENARIO_LOG_CHANNEL_ID", 0)
+        self.PLAY_LOG_CHANNEL_ID = channel_ids.get("PLAY_LOG_CHANNEL_ID", 0)
+
+    async def setup_hook(self):
+        """Bot起動時にCogsをロードし、コマンドを同期する"""
+        # cogsディレクトリ内のCogを全て読み込む
+        cogs_path = Path(__file__).parent / "cogs"
+        if cogs_path.exists() and cogs_path.is_dir():
+            for file in cogs_path.glob("*.py"):
+                if file.stem == "__init__":
+                    continue
+                cog_name = f"bot.cogs.{file.stem}"
+                try:
+                    await self.load_extension(cog_name)
+                    print(f"Cogをロードしました: {cog_name}")
+                except commands.ExtensionError as e:
+                    logging.exception(f"Cog '{cog_name}' のロードに失敗しました。", exc_info=e)
+
+        # スラッシュコマンドをDiscordに同期
+        await self.tree.sync()
+        print("スラッシュコマンドを同期しました。")
+
+    async def on_ready(self):
+        print(f'{self.user} としてDiscordにログインしました')
+
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        """ボイスチャンネルのメンバーがBotのみになったら自動退出する"""
+        if member.id == self.user.id:
+            return
+
+        voice_client = member.guild.voice_client
+        if not voice_client:
+            return
+
+        if len(voice_client.channel.members) == 1 and voice_client.channel.members[0] == self.user:
+            await asyncio.sleep(60)
+            if len(voice_client.channel.members) == 1:
+                print("ボイスチャンネルに誰もいなくなったため、自動的に退出します。")
+                # BGMマネージャーがある場合はここで停止処理を呼ぶ
+                # await bgm_manager.stop_bgm(member.guild)
+                await voice_client.disconnect()
+
+@MyBot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """スラッシュコマンドのグローバルエラーハンドラ"""
+    original_error = getattr(error, 'original', error)
+    logging.exception(f"コマンド '{interaction.command.name if interaction.command else 'N/A'}' でエラー: {original_error}")
+
+    error_map = {
+        FileOperationError: f"ファイルの処理中にエラーが発生しました。\n詳細: {original_error}",
+        CharacterNotFoundError: f"指定されたデータが見つかりませんでした。\n詳細: {original_error}",
+        AIConnectionError: f"AIとの通信に失敗しました。時間をおいて再度試してください。\n詳細: {original_error}",
+        GameError: f"エラーが発生しました: {original_error}",
+        app_commands.CommandOnCooldown: f"コマンドはクールダウン中です。{error.retry_after:.2f}秒後にもう一度試してください。",
+        app_commands.MissingPermissions: "コマンドの実行に必要な権限がありません。"
+    }
+    user_message = next((msg for err_type, msg in error_map.items() if isinstance(original_error, err_type)), "予期せぬエラーが発生しました。")
+
+    if interaction.response.is_done():
+        await interaction.followup.send(user_message, ephemeral=True)
+    else:
+        await interaction.response.send_message(user_message, ephemeral=True)
