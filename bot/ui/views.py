@@ -1,7 +1,8 @@
 import discord
 from discord import ui
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
+from functools import partial
 
 from game.models.character import Character
 from bot.ui.embeds import create_character_embed
@@ -9,6 +10,7 @@ from bot import messaging
 
 if TYPE_CHECKING:
     from bot.client import MyBot
+    from bot.cogs.game_commands import GameCommandsCog
 
 def roll_for_stat():
     """能力値1つ分のダイスを振る (4d6の上位3つの和)"""
@@ -48,7 +50,51 @@ class ConfirmDeleteView(ui.View):
         await interaction.response.edit_message(content=messaging.character_delete_canceled(), view=None)
         self.stop()
 
+class ActionSuggestionView(ui.View):
+    """AIから提案された行動をボタンとして提示するView"""
+    
+    def __init__(self, actions: List[str], cog: "GameCommandsCog", timeout: int = 300):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.message: discord.Message = None
+        
+        # 提案されたアクションごとにボタンを作成
+        for action in actions:
+            button = ui.Button(label=action, style=discord.ButtonStyle.secondary)
+            # partialを使って、コールバックにactionテキストを直接渡す
+            button.callback = partial(self.on_action_button_click, action=action)
+            self.add_item(button)
+            
+    async def on_action_button_click(self, interaction: discord.Interaction, action: str):
+        """アクションボタンがクリックされたときの共通処理"""
+        
+        # 2回以上押せないように、また他の選択肢も押せないように即座に無効化
+        for item in self.children:
+            item.disabled = True
+        # viewを更新してボタンを無効化
+        await interaction.response.edit_message(view=self)
+
+        # Cogのヘルパーメソッドを呼び出してゲームを進行
+        # このメソッドが新しいメッセージをfollowupで送信する
+        await self.cog._proceed_and_respond(interaction, action)
+        
+        self.stop()
+
+    async def on_timeout(self):
+        """Viewがタイムアウトしたときの処理"""
+        for item in self.children:
+            item.disabled = True
+        
+        if self.message:
+            # メッセージにタイムアウトした旨を追記する
+            original_content = self.message.content
+            if "（時間切れです）" not in original_content:
+                 await self.message.edit(content=original_content + "\n\n*（時間切れのため、選択肢は無効になりました）*", view=self)
+        self.stop()
+
+
 # --- Character Creation Views & Modals ---
+
 
 class StatsAllocationView(ui.View):
     """能力値の割り振りを管理するView"""

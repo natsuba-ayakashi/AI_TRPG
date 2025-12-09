@@ -75,6 +75,55 @@ class MyBot(commands.Bot):
                 # await bgm_manager.stop_bgm(member.guild)
                 await voice_client.disconnect()
 
+    async def on_message(self, message: discord.Message):
+        """スレッド内のメッセージをリッスンし、ゲームを進行させる"""
+        # --- メッセージを処理すべきかどうかの事前チェック ---
+        if message.author.bot:
+            return
+        if not message.guild or isinstance(message.channel, discord.DMChannel):
+            return
+        if message.content.startswith(self.command_prefix):
+            # コマンドとして処理されるべきメッセージは無視
+            # process_commandsを呼ぶと二重処理になる可能性があるため、プレフィックスで判定
+            return
+            
+        # game_serviceが初期化されるまで待つ
+        if not self.game_service:
+            return
+            
+        # 対応するゲームセッションをスレッドIDから取得
+        session = self.game_service.sessions.get_session_by_thread_id(message.channel.id)
+        if not session:
+            return # ゲームが行われていないスレッドでの発言は無視
+
+        # --- ゲーム進行処理 ---
+        # プレイヤーの行動であるとみなし、ゲームを進行させる
+        # ロックを取得して、多重実行を防ぐ
+        lock = self.game_service.sessions.get_lock(session.user_id)
+        async with lock:
+            try:
+                # Cogを取得
+                game_cog: "GameCommandsCog" = self.get_cog("ゲーム管理")
+                if not game_cog:
+                    logging.warning("GameCommandsCogが見つかりません。on_messageからの応答処理をスキップします。")
+                    return
+
+                # 処理中であることをユーザーに示す
+                async with message.channel.typing():
+                    response_data = await self.game_service.proceed_game(
+                        user_id=session.user_id,
+                        user_input=message.clean_content
+                    )
+                
+                # Cogのヘルパーメソッドを呼び出して応答を処理
+                await game_cog._handle_response(message.channel, response_data, session.user_id)
+
+            except GameError as e:
+                await message.channel.send(f"ゲームエラー: {e}")
+            except Exception as e:
+                logging.exception(f"on_messageでの予期せぬエラー (Channel: {message.channel.id})")
+                await message.channel.send("予期せぬエラーが発生しました。")
+
     async def on_error(self, event_method: str, *args, **kwargs):
         """グローバルエラーハンドラ"""
         if event_method == 'on_app_command_error':

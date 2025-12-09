@@ -1,10 +1,10 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from typing import List, TYPE_CHECKING
+from typing import List, TYPE_CHECKING, Dict, Union
 
 from core.errors import GameError, CharacterNotFoundError
-from bot.ui.views import ConfirmDeleteView
+from bot.ui.views import ConfirmDeleteView, ActionSuggestionView
 from bot.ui.embeds import create_action_result_embed
 from bot import messaging
 
@@ -17,6 +17,46 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
 
     def __init__(self, bot: "MyBot"):
         self.bot = bot
+
+    async def _handle_response(self, source: Union[discord.Interaction, discord.TextChannel], response_data: Dict, user_id: int):
+        """AIからの応答を解釈し、適切なメッセージとUIを送信する共通ヘルパー"""
+        # narrativeとembedsの準備
+        narrative = response_data.get("narrative", "ゲームマスターは何も言わなかった...")
+        embeds_to_send = []
+        if action_result := response_data.get("action_result"):
+            if action_embed := create_action_result_embed(action_result):
+                embeds_to_send.append(action_embed)
+
+        # Viewの準備
+        view = None
+        if suggested_actions := response_data.get("suggested_actions"):
+            if suggested_actions: # 空リストでないことを確認
+                view = ActionSuggestionView(suggested_actions, self)
+
+        # 応答の送信
+        message = None
+        if isinstance(source, discord.Interaction):
+            # defer()またはedit_message()されている前提
+            # ボタンクリックからの呼び出し(edit_message済み)か、コマンドからの呼び出し(defer済み)かで分岐
+            if source.response.is_done():
+                 message = await source.followup.send(narrative, embeds=embeds_to_send, view=view, wait=True)
+            else:
+                 # これは通常発生しないはずだが、フォールバック
+                 await source.response.send_message(narrative, embeds=embeds_to_send, view=view)
+                 message = await source.original_response()
+        else: # discord.TextChannel
+            message = await source.send(narrative, embeds=embeds_to_send, view=view)
+        
+        if view:
+            view.message = message
+
+        # ゲームオーバー処理
+        if response_data.get("game_over"):
+            channel = source.channel if isinstance(source, discord.Interaction) else source
+            # end_gameサービスを呼び出して状態を保存
+            await self.bot.game_service.end_game(user_id)
+            await channel.send("キャラクターは力尽きた...。ゲームを終了し、スレッドをロックします。")
+            await channel.edit(archived=True, locked=True)
 
     # --- /start_game コマンド ---
 
@@ -37,15 +77,21 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
                 invitable=False
             )
 
-            # GameServiceを呼び出してゲームを開始
-            session = await self.bot.game_service.start_game(
+            # GameServiceを呼び出してゲームを開始し、導入シナリオを取得
+            session, introduction_narrative = await self.bot.game_service.start_game(
                 user_id=interaction.user.id,
                 char_name=character_name,
                 thread=thread
             )
 
             await interaction.followup.send(messaging.start_game_followup(thread), ephemeral=True)
-            await thread.send(messaging.start_game_thread_message(interaction.user, session.character))
+
+            # スレッドに開始メッセージと導入シナリオを送信
+            start_message = messaging.start_game_thread_message(interaction.user, session.character)
+            # 導入シナリオと最初の選択肢を提示
+            response_data = {"narrative": introduction_narrative, "suggested_actions": ["周囲を見渡す", "持ち物を確認する", "地図を見る"]}
+            await self._handle_response(thread, response_data, interaction.user.id)
+
 
         except (GameError, CharacterNotFoundError) as e:
             await interaction.followup.send(str(e), ephemeral=True)
@@ -111,33 +157,20 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
             await interaction.response.send_message("このコマンドは、あなたのアクティブなゲームスレッド内でのみ使用できます。", ephemeral=True)
             return
 
-        await interaction.response.defer() # AIの応答には時間がかかるため、応答を保留
+        await interaction.response.defer()
 
         # 「逃げる」コマンドの特別な処理
         if session.in_combat and action.strip() in ["逃げる", "逃走", "flee", "run"]:
             try:
                 flee_narrative = await self.bot.game_service.flee_combat(interaction.user.id)
-                await interaction.followup.send(flee_narrative)
+                await interaction.followup.send(flee_narrative) # TODO: これもhandle_responseに統合したい
             except GameError as e:
                 await interaction.followup.send(str(e))
             return
 
         try:
             response_data = await self.bot.game_service.proceed_game(interaction.user.id, action)
-            
-            embeds_to_send = []
-            if action_result := response_data.get("action_result"):
-                if action_embed := create_action_result_embed(action_result):
-                    embeds_to_send.append(action_embed)
-
-            narrative = response_data.get("narrative", "ゲームマスターは何も言わなかった...")
-            
-            # ゲームオーバー処理後、スレッドをアーカイブする
-            if response_data.get("game_over"):
-                await interaction.followup.send(narrative, embeds=embeds_to_send)
-                await interaction.channel.edit(archived=True, locked=True)
-            else:
-                await interaction.followup.send(narrative, embeds=embeds_to_send)
+            await self._handle_response(interaction, response_data, interaction.user.id)
         except GameError as e:
             await interaction.followup.send(str(e))
 
@@ -155,8 +188,7 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
 
         try:
             response_data = await self.bot.game_service.use_item(interaction.user.id, item_name)
-            narrative = response_data.get("narrative", f"「{item_name}」を使ったが、何も起こらなかった...")
-            await interaction.followup.send(narrative)
+            await self._handle_response(interaction, response_data, interaction.user.id)
         except GameError as e:
             await interaction.followup.send(str(e), ephemeral=True)
 
