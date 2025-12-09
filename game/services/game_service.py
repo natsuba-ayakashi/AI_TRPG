@@ -1,6 +1,7 @@
-from typing import TYPE_CHECKING, Optional, Dict, Any
+from typing import TYPE_CHECKING, Optional, Dict, Any, Tuple, List
 import discord
 import random
+# from io import BytesIO
 import json
 
 from core.errors import GameError
@@ -11,6 +12,7 @@ if TYPE_CHECKING:
     from game.managers.session_manager import SessionManager
     from game.services.character_service import CharacterService
     from game.services.ai_service import AIService
+    # from game.services.image_generation_service import ImageGenerationService
     from infrastructure.repositories.world_repository import WorldRepository
     from bot.client import MyBot
     from infrastructure.data_loaders.world_data_loader import WorldDataLoader
@@ -175,6 +177,9 @@ class GameService:
             victory_response = await self.ai.generate_game_response(session, session.victory_prompt)
             ai_response["narrative"] += "\n\n" + victory_response.get("narrative", "敵をすべて倒した！")
             session.victory_prompt = None # 使用済みなのでクリア
+            # 
+            # image_data = await self.images.generate_image_from_text(ai_response["narrative"])
+            
             self.bot.dispatch("game_proceed", session, user_input, ai_response)
             return ai_response
 
@@ -195,12 +200,17 @@ class GameService:
                 ai_response["narrative"] += "\n\n" + enemy_response.get("narrative", "") + "\n\n" + game_over_narrative
                 # ゲーム進行イベントを発行して終了
                 ai_response["game_over"] = True
+                # 
+                # image_data = await self.images.generate_image_from_text(game_over_narrative)
+                
                 self.bot.dispatch("game_proceed", session, user_input, ai_response)
                 return ai_response
 
             # プレイヤーの行動結果と敵の行動結果を結合して返す
             # ここでは単純に物語を結合するが、より洗練された方法も考えられる
             ai_response["narrative"] += "\n\n" + enemy_response.get("narrative", "")
+
+        # image_data = await self.images.generate_image_from_text(ai_response["narrative"])
 
         # ゲーム進行イベントを発行
         self.bot.dispatch("game_proceed", session, user_input, ai_response)
@@ -263,6 +273,8 @@ class GameService:
         self._apply_state_changes(session, ai_response.get("state_changes", {}))
 
         self.bot.dispatch("game_proceed", session, f"アイテム使用: {item_name}", ai_response)
+        
+        # image_data = await self.images.generate_image_from_text(ai_response["narrative"])
         return ai_response
 
     async def loot_grave(self, user_id: int, dead_char_name: str) -> List[str]:
@@ -381,7 +393,7 @@ class GameService:
         session.in_combat = True
         session.combat_turn = "player" # 戦闘開始時は必ずプレイヤーのターン
         session.current_enemies.clear()
-        all_enemies_data = self.worlds.get('enemies') # fantasy_world.jsonなどから敵の基本データを取得
+        all_enemies_data = self.worlds.get('fantasy_world', 'enemies') # fantasy_world.jsonなどから敵の基本データを取得
         if not all_enemies_data:
             return
 

@@ -60,16 +60,28 @@ class StatsAllocationView(ui.View):
         self.parent_view = parent_view
         self.stats_to_assign = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
         self.assignments = {}
+        self.selected_stat = None
+        self.selected_roll = None
         self.message: discord.Message = None
 
-        for stat in self.stats_to_assign:
-            select = ui.Select(placeholder=f"{stat}に割り振る値を選択", options=[discord.SelectOption(label=str(roll)) for roll in self.rolls], custom_id=f"stat_select_{stat}")
-            select.callback = self.on_stat_select
-            self.add_item(select)
-        
-        self.confirm_button = ui.Button(label="割り振りを確定", style=discord.ButtonStyle.primary, custom_id="confirm_stats", disabled=True)
-        self.confirm_button.callback = self.on_confirm
+        # UIコンポーネントの初期化
+        self.stat_select = ui.Select(placeholder="割り振る能力値を選択...", custom_id="stat_select")
+        self.stat_select.callback = self.on_stat_select
+        self.add_item(self.stat_select)
+
+        self.roll_select = ui.Select(placeholder="割り振るダイス結果を選択...", custom_id="roll_select", disabled=True)
+        self.roll_select.callback = self.on_roll_select
+        self.add_item(self.roll_select)
+
+        self.assign_button = ui.Button(label="割り振り", style=discord.ButtonStyle.secondary, custom_id="assign_button", disabled=True)
+        self.assign_button.callback = self.on_assign
+        self.add_item(self.assign_button)
+
+        self.confirm_button = ui.Button(label="割り振りを確定", style=discord.ButtonStyle.primary, custom_id="confirm_stats", disabled=True, row=2)
+        self.confirm_button.callback = self.on_confirm_assignments
         self.add_item(self.confirm_button)
+
+        self.update_selects()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author.id:
@@ -77,43 +89,72 @@ class StatsAllocationView(ui.View):
             return False
         return True
 
+    def update_selects(self):
+        """セレクトメニューの選択肢と状態を更新する"""
+        # 能力値選択メニューの更新
+        unassigned_stats = [s for s in self.stats_to_assign if s not in self.assignments]
+        if unassigned_stats:
+            self.stat_select.options = [discord.SelectOption(label=s) for s in unassigned_stats]
+        else:
+            self.stat_select.options = [discord.SelectOption(label="全ての能力値を割り振りました", value="all_assigned", default=True)]
+        self.stat_select.disabled = not unassigned_stats
+
+        # ダイス結果選択メニューの更新
+        assigned_rolls = set(self.assignments.values())
+        
+        # 割り当て済みのロールをカウント
+        from collections import Counter
+        assigned_counts = Counter(assigned_rolls)
+        
+        # 未割り当てのロールをインデックス付きで管理
+        unassigned_rolls_with_indices = []
+        total_counts = Counter(self.rolls)
+        for roll, total_count in total_counts.items():
+            assigned_count = assigned_counts.get(roll, 0)
+            for i in range(assigned_count, total_count):
+                unassigned_rolls_with_indices.append((roll, i))
+
+        # labelはロールの値、valueは "ロール_インデックス" 形式で一意にする
+        self.roll_select.options = [discord.SelectOption(label=str(roll), value=f"{roll}_{idx}") for roll, idx in sorted(unassigned_rolls_with_indices, key=lambda x: x[0], reverse=True)]
+        self.roll_select.disabled = not self.selected_stat or not unassigned_rolls_with_indices
+
+        # ボタンの状態更新
+        self.assign_button.disabled = not (self.selected_stat and self.selected_roll)
+        self.confirm_button.disabled = len(self.assignments) != len(self.stats_to_assign)
+
     async def on_stat_select(self, interaction: discord.Interaction):
-        stat_name = interaction.data['custom_id'].split('_')[-1]
-        selected_value = int(interaction.data['values'][0])
+        self.selected_stat = interaction.data["values"][0]
+        self.update_selects()
+        await interaction.response.edit_message(content=self._get_current_content(), view=self)
 
-        for key, value in self.assignments.items():
-            if value == selected_value and key != stat_name:
-                self.assignments[key] = None
-                break
-        self.assignments[stat_name] = selected_value
+    async def on_roll_select(self, interaction: discord.Interaction):
+        # value (e.g., "14_0") からロールの値を取得
+        self.selected_roll = int(interaction.data["values"][0].split('_')[0])
+        self.update_selects()
+        await interaction.response.edit_message(content=self._get_current_content(), view=self)
 
-        assigned_values = {v for v in self.assignments.values() if v is not None}
-        remaining_rolls = [r for r in self.rolls if r not in assigned_values]
-
-        for item in self.children:
-            if isinstance(item, ui.Select):
-                current_stat = item.custom_id.split('_')[-1]
-                current_assignment = self.assignments.get(current_stat)
-                new_options = [discord.SelectOption(label=str(r)) for r in remaining_rolls]
-                if current_assignment is not None and current_assignment not in remaining_rolls:
-                    new_options.insert(0, discord.SelectOption(label=str(current_assignment)))
-                item.options = new_options
-
-        all_assigned = len(self.assignments) == len(self.stats_to_assign) and all(v is not None for v in self.assignments.values())
-        self.confirm_button.disabled = not all_assigned
-
-        assignment_text = "\n".join([f"- **{stat}**: {val if val is not None else '未割り当て'}" for stat, val in sorted(self.assignments.items())])
-        await interaction.response.edit_message(content=f"ダイスロールの結果を各能力値に割り振ってください。\n\n**現在の割り振り状況:**\n{assignment_text}", view=self)
-
-    async def on_confirm(self, interaction: discord.Interaction):
-        assigned_values = [v for v in self.assignments.values() if v is not None]
-        if len(assigned_values) != len(self.rolls) or len(set(assigned_values)) != len(self.rolls):
-            await interaction.response.send_message("エラー: 全ての能力値にユニークなダイス結果を割り振ってください。", ephemeral=True)
+    async def on_assign(self, interaction: discord.Interaction):
+        if self.selected_stat == "all_assigned": # ダミーオプションが選択された場合は何もしない
+            await interaction.response.send_message("全ての能力値は既に割り振られています。", ephemeral=True)
             return
 
+        self.assignments[self.selected_stat] = self.selected_roll
+        self.selected_stat = None
+        self.selected_roll = None
+        self.update_selects()
+        await interaction.response.edit_message(content=self._get_current_content(), view=self)
+
+    async def on_confirm_assignments(self, interaction: discord.Interaction):
         self.parent_view.character_data["stats"] = self.assignments
         await interaction.response.edit_message(content="能力値を保存しました。最終確認画面を生成します...", view=None)
         await self.parent_view.show_summary_and_confirm(self.message)
+
+    def _get_current_content(self) -> str:
+        assignment_text = "\n".join([f"- **{stat}**: {val}" for stat, val in sorted(self.assignments.items())])
+        current_selection_text = ""
+        if self.selected_stat and self.selected_stat != "all_assigned": current_selection_text += f"\n**選択中の能力値:** {self.selected_stat}"
+        if self.selected_roll is not None: current_selection_text += f"\n**選択中のダイス結果:** {self.selected_roll}"
+        return (f"ダイスロールの結果を各能力値に割り振ってください。\n\n**現在の割り振り状況:**\n{assignment_text}\n{current_selection_text}")
 
 class CharacterCreationView(ui.View):
     """キャラクター作成の対話フローを管理するView"""
@@ -123,7 +164,7 @@ class CharacterCreationView(ui.View):
         self.bot = bot
         self.character_data = {}
         self.message: discord.Message = None
-        self.options = self.bot.world_data_loader.get_creation_options()
+        self.options = self.bot.world_data_loader.get('fantasy_world', 'creation_options')
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author.id:
@@ -204,20 +245,26 @@ class CharacterCreationView(ui.View):
         self.stop()
 
 class NameInputModal(ui.Modal):
+    def __init__(self, *, title: str, view: CharacterCreationView):
+        super().__init__(title=title)
+        self.view = view
+
     char_name = ui.TextInput(label="キャラクター名", required=True, max_length=50)
     async def on_submit(self, interaction: discord.Interaction):
-        view: CharacterCreationView = self.view
-        view.character_data["name"] = self.char_name.value
-        await interaction.response.defer(); await view.prompt_race_selection()
+        self.view.character_data["name"] = self.char_name.value
+        await interaction.response.defer(); await self.view.prompt_race_selection()
 
 class ProfileInputModal(ui.Modal):
+    def __init__(self, *, title: str, view: CharacterCreationView):
+        super().__init__(title=title)
+        self.view = view
+
     appearance = ui.TextInput(label="外見", style=discord.TextStyle.paragraph, required=False, max_length=500)
     background = ui.TextInput(label="背景設定", style=discord.TextStyle.paragraph, required=False, max_length=1000)
     async def on_submit(self, interaction: discord.Interaction):
-        view: CharacterCreationView = self.view
-        if self.appearance.value: view.character_data["appearance"] = self.appearance.value
-        if self.background.value: view.character_data["background"] = self.background.value
-        await interaction.response.defer(); await view.prompt_stats_roll()
+        if self.appearance.value: self.view.character_data["appearance"] = self.appearance.value
+        if self.background.value: self.view.character_data["background"] = self.background.value
+        await interaction.response.defer(); await self.view.prompt_stats_roll()
 
 # --- Character Progression Views & Modals ---
 
@@ -293,7 +340,7 @@ class StatIncreaseModal(ui.Modal):
         super().__init__(title="能力値強化")
         self.character = character
         self.parent_view = parent_view
-        options = [discord.SelectOption(label=name, description=f"現在値: {val}") for name, val in self.character.stats.items()]
+        options = [discord.SelectOption(label=name, description=f"現在値: {val}") for name, val in character.stats.items()]
         self.stat_select = ui.Select(placeholder="強化する能力値を選択...", options=options)
         self.add_item(self.stat_select)
 
@@ -311,10 +358,10 @@ class SkillIncreaseModal(ui.Modal):
         super().__init__(title="技能強化")
         self.character = character
         self.parent_view = parent_view
-        options = [discord.SelectOption(label=name, description=f"現在ランク: {rank}") for name, rank in self.character.skills.items()]
+        options = [discord.SelectOption(label=name, description=f"現在ランク: {rank}") for name, rank in character.skills.items()]
         self.skill_select = ui.Select(placeholder="強化する技能を選択...", options=options)
         self.add_item(self.skill_select)
-        self.points = ui.TextInput(label="使用するポイント数", placeholder=f"最大 {self.character.skill_points} P", required=True)
+        self.points = ui.TextInput(label="使用するポイント数", placeholder=f"最大 {character.skill_points} P", required=True)
         self.add_item(self.points)
 
     async def on_submit(self, interaction: discord.Interaction):

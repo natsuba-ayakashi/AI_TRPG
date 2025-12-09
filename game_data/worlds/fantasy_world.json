@@ -1,0 +1,82 @@
+{
+  "rules": "この世界は、剣と魔法のファンタジー世界です。プレイヤーの行動はダイスロールによって成否が判定されることがあります。",
+  "creation_options": {
+    "races": [
+      {
+        "name": "人間",
+        "description": "最も数が多く、多様な能力を持つ種族。",
+        "bonus": { "stat": "CHA", "value": 1 }
+      },
+      {
+        "name": "エルフ",
+        "description": "森に住む長寿の種族。俊敏さと知性に優れる。",
+        "bonus": { "stat": "DEX", "value": 1 }
+      },
+      {
+        "name": "ドワーフ",
+        "description": "山脈に住む頑健な種族。手先が器用で力持ち。",
+        "bonus": { "stat": "CON", "value": 1 }
+      }
+    ],
+    "classes": [
+      {
+        "name": "戦士",
+        "description": "剣や斧を扱い、前線で戦う屈強なクラス。"
+      },
+      {
+        "name": "魔術師",
+        "description": "強力な魔法を操り、遠距離から敵を攻撃するクラス。"
+      },
+      {
+        "name": "盗賊",
+        "description": "素早い動きで敵を翻弄し、罠の解除や鍵開けも得意なクラス。"
+      }
+    ]
+  },
+  "items": {
+    "ポーション": {
+      "description": "飲むとHPを少し回復する。state_changesで `hp_change` を正の値で返すこと。"
+    },
+    "錆びた短剣": {
+      "description": "ありふれた古い短剣。"
+    }
+  },
+  "enemies": {
+    "goblin_warrior": {
+      "id": "goblin_warrior",
+      "name": "ゴブリンの戦士",
+      "hp": 25,
+      "stats": {
+        "STR": 12,
+        "DEX": 14
+      },
+      "rewards": {
+        "xp": 10,
+        "items": ["錆びた短剣"]
+      }
+    }
+  },
+  "npcs": {
+    "npc_gardener": {
+      "name": "庭師の老人"
+    }
+  },
+  "quests": {
+    "main_quest_01": {
+        "title": "最初の試練",
+        "description": "村の周辺にいるゴブリンを討伐する。"
+    }
+  },
+  "timed_events": {
+    "morning_market": {
+      "trigger": {
+        "day_modulo": 2,
+        "time_of_day": "朝"
+      },
+      "action": {
+        "type": "NARRATION",
+        "details": { "narrative": "2日に一度の朝市が開かれ、村がいつもより活気に満ちている。" }
+      }
+    }
+  }
+}

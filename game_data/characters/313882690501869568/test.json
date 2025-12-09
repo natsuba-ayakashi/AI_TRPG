@@ -1,0 +1,29 @@
+{
+    "char_id": "8225d563-4539-4a4a-b8ce-e97b00b3ee40",
+    "user_id": 313882690501869568,
+    "name": "test",
+    "race": "ドワーフ",
+    "class": "戦士",
+    "appearance": "おっさん",
+    "background": "しがないおっさん、女とのかかわりもないため少し悩んでいる",
+    "stats": {
+        "STR": 14,
+        "DEX": 9,
+        "CON": 14,
+        "INT": 14,
+        "WIS": 10,
+        "CHA": 13
+    },
+    "skills": {},
+    "level": 1,
+    "xp": 0,
+    "stat_points": 0,
+    "skill_points": 0,
+    "active_quests": [],
+    "completed_quests": [],
+    "inventory": [],
+    "hp": 38,
+    "max_hp": 38,
+    "mp": 38,
+    "max_mp": 38
+}

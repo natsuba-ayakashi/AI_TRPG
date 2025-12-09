@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Dict, Any
-import httpx
 import json
+from openai import AsyncOpenAI
 
 from core.errors import AIConnectionError
 
@@ -13,11 +13,13 @@ class AIService:
     AIモデルとの対話を担当するサービスクラス。
     ゲームマスター(GM)としての応答を生成します。
     """
-    def __init__(self, api_key: str, model_name: str, world_data_loader: "WorldDataLoader"):
-        self.api_key = api_key
+    def __init__(self, base_url: str, model_name: str, world_data_loader: "WorldDataLoader"):
+        self.client = AsyncOpenAI(
+            base_url=base_url,
+            api_key="ollama", # Ollamaの場合は必須
+        )
         self.model_name = model_name
-        self.world_data = world_data_loader.get('fantasy_world') # 'fantasy_world.json' を読み込む
-        self.http_client = httpx.AsyncClient(timeout=60.0)
+        self.world_data = world_data_loader.get_world('fantasy_world') # 'fantasy_world.json' のデータを丸ごと読み込む
 
     def _build_system_prompt(self, session: "GameSession") -> str:
         """AIに与える役割や背景情報を定義するシステムプロンプトを構築する。"""
@@ -119,11 +121,10 @@ class AIService:
 
     def _build_messages(self, session: "GameSession", user_input: str) -> list[dict]:
         """AIに送信するメッセージのリストを構築する。"""
-        messages = [{"role": "system", "content": self._build_system_prompt(session)}]
-        
+        messages = []
         # 過去の対話履歴を追加
         for entry in session.conversation_history:
-            messages.append(entry)
+            messages.append({"role": entry["role"], "content": entry["content"]})
             
         # 今回のプレイヤーの行動を追加
         messages.append({"role": "user", "content": user_input})
@@ -134,23 +135,17 @@ class AIService:
         """
         プレイヤーの入力に基づき、AIからゲームの応答を生成します。
         """
+        system_prompt = self._build_system_prompt(session)
         messages = self._build_messages(session, user_input)
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "response_format": {"type": "json_object"}
-        }
 
         try:
-            response = await self.http_client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-            response.raise_for_status()
-            
-            ai_response_data = response.json()
-            return json.loads(ai_response_data['choices'][0]['message']['content'])
-        except (httpx.HTTPStatusError, json.JSONDecodeError, KeyError) as e:
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": system_prompt}] + messages,
+                temperature=0.7,
+                response_format={"type": "json_object"},
+            )
+            response_content = response.choices[0].message.content
+            return json.loads(response_content)
+        except Exception as e:
             raise AIConnectionError(f"AIからの応答生成に失敗しました: {e}") from e

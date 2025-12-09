@@ -21,6 +21,9 @@ CHAR_SHEET_CHANNEL_ID = int(get_env_var("CHAR_SHEET_CHANNEL_ID", "0"))
 SCENARIO_LOG_CHANNEL_ID = int(get_env_var("SCENARIO_LOG_CHANNEL_ID", "0"))
 PLAY_LOG_CHANNEL_ID = int(get_env_var("PLAY_LOG_CHANNEL_ID", "0"))
 
-# --- AI関連 ---
-AI_API_KEY = get_env_var("AI_API_KEY")
-AI_MODEL_NAME = get_env_var("AI_MODEL_NAME", "gpt-4-turbo") # デフォルトモデル
+# --- AI関連 (Ollamaを使用) ---
+LOCAL_AI_BASE_URL = get_env_var("LOCAL_AI_BASE_URL", "http://localhost:11434/v1") # OllamaのデフォルトURL
+LOCAL_AI_MODEL_NAME = get_env_var("LOCAL_AI_MODEL_NAME", "llama3:8b-instruct-q5_K_M") # Ollamaで利用するモデル名
+
+# --- 画像生成AI関連 (任意) ---
+# IMAGE_GEN_API_URL = get_env_var("IMAGE_GEN_API_URL", default=None) # 例: "http://127.0.0.1:7860/sdapi/v1/txt2img"

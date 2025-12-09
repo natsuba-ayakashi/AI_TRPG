@@ -22,13 +22,14 @@ class MyBot(commands.Bot):
     """プロジェクトのカスタムBotクラス"""
     def __init__(
         self,
+        world_data_loader: "WorldDataLoader",
         channel_ids: dict[str, int],
     ):
         super().__init__(command_prefix="!", intents=intents, case_insensitive=True)
         # 依存性注入によって後から設定されるプロパティ
         self.game_service: "GameService" = None
         self.character_service: "CharacterService" = None
-        self.world_data_loader: "WorldDataLoader" = None
+        self.world_data_loader: "WorldDataLoader" = world_data_loader
 
         # 設定値
         self.CHAR_SHEET_CHANNEL_ID = channel_ids.get("CHAR_SHEET_CHANNEL_ID", 0)
@@ -74,23 +75,27 @@ class MyBot(commands.Bot):
                 # await bgm_manager.stop_bgm(member.guild)
                 await voice_client.disconnect()
 
-@MyBot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    """スラッシュコマンドのグローバルエラーハンドラ"""
-    original_error = getattr(error, 'original', error)
-    logging.exception(f"コマンド '{interaction.command.name if interaction.command else 'N/A'}' でエラー: {original_error}")
+    async def on_error(self, event_method: str, *args, **kwargs):
+        """グローバルエラーハンドラ"""
+        if event_method == 'on_app_command_error':
+            interaction: discord.Interaction = args[0]
+            error: app_commands.AppCommandError = args[1]
+            original_error = getattr(error, 'original', error)
+            logging.exception(f"コマンド '{interaction.command.name if interaction.command else 'N/A'}' でエラー: {original_error}")
 
-    error_map = {
-        FileOperationError: f"ファイルの処理中にエラーが発生しました。\n詳細: {original_error}",
-        CharacterNotFoundError: f"指定されたデータが見つかりませんでした。\n詳細: {original_error}",
-        AIConnectionError: f"AIとの通信に失敗しました。時間をおいて再度試してください。\n詳細: {original_error}",
-        GameError: f"エラーが発生しました: {original_error}",
-        app_commands.CommandOnCooldown: f"コマンドはクールダウン中です。{error.retry_after:.2f}秒後にもう一度試してください。",
-        app_commands.MissingPermissions: "コマンドの実行に必要な権限がありません。"
-    }
-    user_message = next((msg for err_type, msg in error_map.items() if isinstance(original_error, err_type)), "予期せぬエラーが発生しました。")
+            error_map = {
+                FileOperationError: f"ファイルの処理中にエラーが発生しました。\n詳細: {original_error}",
+                CharacterNotFoundError: f"指定されたデータが見つかりませんでした。\n詳細: {original_error}",
+                AIConnectionError: "AIとの通信に失敗しました。時間をおいて再度試してください。(APIの利用制限に達したか、サーバーが混み合っている可能性があります)",
+                GameError: f"エラーが発生しました: {original_error}",
+                app_commands.CommandOnCooldown: f"コマンドはクールダウン中です。{error.retry_after:.2f}秒後にもう一度試してください。",
+                app_commands.MissingPermissions: "コマンドの実行に必要な権限がありません。"
+            }
+            user_message = next((msg for err_type, msg in error_map.items() if isinstance(original_error, err_type)), "予期せぬエラーが発生しました。")
 
-    if interaction.response.is_done():
-        await interaction.followup.send(user_message, ephemeral=True)
-    else:
-        await interaction.response.send_message(user_message, ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send(user_message, ephemeral=True)
+            else:
+                await interaction.response.send_message(user_message, ephemeral=True)
+        else:
+            logging.exception(f"未処理のイベントエラー: {event_method}")
