@@ -23,12 +23,17 @@ class LoggingCog(commands.Cog, name="ゲームログ"):
         if not channel or not isinstance(channel, discord.TextChannel):
             return
 
+        user = self.bot.get_user(session.user_id) or await self.bot.fetch_user(session.user_id)
+        if not user:
+            # ユーザーが取得できない場合はログをスキップ
+            return
+
         embed = discord.Embed(
             title="▶️ ゲーム開始",
             description=f"**{session.character.name}** の冒険が始まりました。",
             color=discord.Color.green()
         )
-        embed.set_author(name=self.bot.get_user(session.user_id).display_name, icon_url=self.bot.get_user(session.user_id).display_avatar)
+        embed.set_author(name=user.display_name, icon_url=user.display_avatar)
         embed.set_footer(text=f"ユーザーID: {session.user_id}")
         await channel.send(embed=embed)
 
@@ -39,11 +44,16 @@ class LoggingCog(commands.Cog, name="ゲームログ"):
         if not channel or not isinstance(channel, discord.TextChannel):
             return
 
-        embed = discord.Embed(
-            title=f"📜 ターン進行: {session.character.name}",
-            color=discord.Color.light_grey()
-        )
-        embed.set_author(name=self.bot.get_user(session.user_id).display_name, icon_url=self.bot.get_user(session.user_id).display_avatar)
+        user = self.bot.get_user(session.user_id)
+        if not user:
+            user = await self.bot.fetch_user(session.user_id)
+        if not user:
+            # ユーザーが取得できない場合はログをスキップ
+            return
+
+        embed = discord.Embed(title=f"📜 ターン進行: {session.character.name}", color=discord.Color.light_grey())
+        if user:
+            embed.set_author(name=user.display_name, icon_url=user.display_avatar)
         embed.add_field(name="プレイヤーの行動", value=f"```{user_input}```", inline=False)
         
         narrative = ai_response.get("narrative", "（描写なし）")
@@ -84,8 +94,13 @@ class LoggingCog(commands.Cog, name="ゲームログ"):
         if not channel or not isinstance(channel, discord.TextChannel):
             return
 
+        user = self.bot.get_user(session.user_id) or await self.bot.fetch_user(session.user_id)
+        if not user:
+            # ユーザーが取得できない場合はログをスキップ
+            return
+
         embed = discord.Embed(title="⏹️ ゲーム終了", description=f"**{session.character.name}** の冒険が終了しました。", color=discord.Color.red())
-        embed.set_author(name=self.bot.get_user(session.user_id).display_name, icon_url=self.bot.get_user(session.user_id).display_avatar)
+        embed.set_author(name=user.display_name, icon_url=user.display_avatar)
         embed.set_footer(text=f"ユーザーID: {session.user_id}")
         await channel.send(embed=embed)
 

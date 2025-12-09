@@ -51,7 +51,7 @@ class GameSession:
     def _check_timed_events(self, world_data_loader: "WorldDataLoader"):
         """現在の時刻に合致する時限イベントがあるか確認する"""
         self.triggered_event_info = None
-        timed_events = world_data_loader.get('timed_events')
+        timed_events = world_data_loader.get('fantasy_world', 'timed_events')
         if not timed_events:
             return
 

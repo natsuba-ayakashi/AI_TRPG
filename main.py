@@ -1,8 +1,15 @@
+import sys
+import os
 import logging
 import asyncio
 
+# プロジェクトのルートディレクトリをPythonのパスに追加
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from bot.client import MyBot
-from config.settings import BOT_TOKEN, CHAR_SHEET_CHANNEL_ID, SCENARIO_LOG_CHANNEL_ID, PLAY_LOG_CHANNEL_ID, AI_API_KEY, AI_MODEL_NAME
+from config.settings import BOT_TOKEN, CHAR_SHEET_CHANNEL_ID, SCENARIO_LOG_CHANNEL_ID, PLAY_LOG_CHANNEL_ID, LOCAL_AI_BASE_URL, LOCAL_AI_MODEL_NAME
 from game.managers.session_manager import SessionManager
 from infrastructure.data_loaders.world_data_loader import WorldDataLoader
 from infrastructure.repositories.file_repository import FileRepository
@@ -20,31 +27,33 @@ async def main():
     character_repository = FileRepository("game_data/characters")
     world_repository = WorldRepository("game_data/world_state.json")
 
-    # Bot (Presentation Layer) のインスタンス化と依存性の注入
-    # Botインスタンスを先に生成する必要があるため、サービスは後から注入する
-    bot = MyBot(channel_ids={
-        "CHAR_SHEET_CHANNEL_ID": CHAR_SHEET_CHANNEL_ID,
-        "SCENARIO_LOG_CHANNEL_ID": SCENARIO_LOG_CHANNEL_ID,
-        "PLAY_LOG_CHANNEL_ID": PLAY_LOG_CHANNEL_ID,
-    })
+    # Bot (Presentation Layer) のインスタンス化
+    # GameServiceがBotインスタンスを必要とするため、先に生成する
+    bot = MyBot(
+        world_data_loader=world_data_loader,
+        channel_ids={
+            "CHAR_SHEET_CHANNEL_ID": CHAR_SHEET_CHANNEL_ID,
+            "SCENARIO_LOG_CHANNEL_ID": SCENARIO_LOG_CHANNEL_ID,
+            "PLAY_LOG_CHANNEL_ID": PLAY_LOG_CHANNEL_ID,
+        }
+    )
 
     # Game Layer
     session_manager = SessionManager()
     character_service = CharacterService(character_repository=character_repository)
-    ai_service = AIService(api_key=AI_API_KEY, model_name=AI_MODEL_NAME, world_data_loader=world_data_loader)
+    ai_service = AIService(base_url=LOCAL_AI_BASE_URL, model_name=LOCAL_AI_MODEL_NAME, world_data_loader=world_data_loader)
     game_service = GameService(
+        bot=bot, # Botインスタンスを注入
         session_manager=session_manager,
         character_service=character_service,
         world_data_loader=world_data_loader,
         world_repository=world_repository,
-        bot=bot, # botインスタンスを注入
         ai_service=ai_service
     )
 
-    # Botにサービスをセット
+    # Botに各サービスをセット
     bot.game_service = game_service
     bot.character_service = character_service
-    bot.world_data_loader = world_data_loader
 
     await bot.start(BOT_TOKEN)
 

@@ -393,7 +393,7 @@ class GameService:
         session.in_combat = True
         session.combat_turn = "player" # 戦闘開始時は必ずプレイヤーのターン
         session.current_enemies.clear()
-        all_enemies_data = self.worlds.get('enemies') # fantasy_world.jsonなどから敵の基本データを取得
+        all_enemies_data = self.worlds.get('fantasy_world', 'enemies') # fantasy_world.jsonなどから敵の基本データを取得
         if not all_enemies_data:
             return
 

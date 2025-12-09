@@ -86,6 +86,34 @@ AI_TRPG_Fantasy/
     python main.py
     ```
 
+## 🤖 Botのサーバーへの導入
+
+1.  **Discord Developer Portalにアクセス**:
+    - Botのアプリケーションを作成したDiscord Developer Portalにアクセスし、ログインします。
+
+2.  **アプリケーションを選択**:
+    - アプリケーションの一覧から、このTRPGボットを選択します。
+
+3.  **URL Generatorを開く**:
+    - 左側のメニューから「**OAuth2**」 > 「**URL Generator**」の順にクリックします。
+
+4.  **スコープ (Scopes) を選択**:
+    - `bot` と `applications.commands` の2つにチェックを入れます。
+
+5.  **権限 (Bot Permissions) を設定**:
+    - 表示された権限リストの中から、Botが動作するために必要な権限にチェックを入れます。少なくとも以下の権限が必要です。
+    - **Text Permissions**:
+        - `Send Messages` (メッセージを送信)
+        - `Send Messages in Threads` (スレッドでメッセージを送信)
+        - `Create Private Threads` (プライベートスレッドを作成)
+        - `Manage Threads` (スレッドの管理)
+        - `Embed Links` (埋め込みリンク)
+        - `Read Message History` (メッセージ履歴を読む)
+
+6.  **招待URLを生成してアクセス**:
+    - ページ下部に生成されたURLをコピーし、ブラウザでアクセスします。
+    - Botを追加したいサーバーを選択し、画面の指示に従って認証を完了させてください。
+
 ---
 
 この`README.md`は、プロジェクトの現状を反映したものです。新しい機能が追加された際には、随時更新していくことが推奨されます。

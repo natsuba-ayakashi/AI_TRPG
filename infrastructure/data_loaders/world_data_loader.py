@@ -33,8 +33,22 @@ class WorldDataLoader:
             except (json.JSONDecodeError, FileNotFoundError) as e:
                 print(f"エラー: 世界データ '{file_path.name}' の読み込みに失敗しました。 - {e}")
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, world_name: str, key: str) -> Optional[Any]:
         """
-        指定されたキーに対応する世界データを取得します。
+        指定された世界のデータから、キーに対応する値を取得します。
+
+        Args:
+            world_name: 取得元の世界の名前 (例: 'fantasy_world')
+            key: 取得したいデータのキー
         """
-        return self._world_data.get(key)
+        world = self._world_data.get(world_name)
+        return world.get(key) if world else None
+
+    def get_world(self, world_name: str) -> Optional[Dict[str, Any]]:
+        """
+        指定された世界のデータ全体を辞書として取得します。
+
+        Args:
+            world_name: 取得したい世界の名前 (例: 'fantasy_world')
+        """
+        return self._world_data.get(world_name)

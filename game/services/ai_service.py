@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Dict, Any
 import json
-import google.generativeai as genai
+from openai import AsyncOpenAI
 
 from core.errors import AIConnectionError
 
@@ -13,10 +13,13 @@ class AIService:
     AIモデルとの対話を担当するサービスクラス。
     ゲームマスター(GM)としての応答を生成します。
     """
-    def __init__(self, api_key: str, model_name: str, world_data_loader: "WorldDataLoader"):
-        genai.configure(api_key=api_key)
+    def __init__(self, base_url: str, model_name: str, world_data_loader: "WorldDataLoader"):
+        self.client = AsyncOpenAI(
+            base_url=base_url,
+            api_key="ollama", # Ollamaの場合は必須
+        )
         self.model_name = model_name
-        self.world_data = world_data_loader.get('fantasy_world') # 'fantasy_world.json' を読み込む
+        self.world_data = world_data_loader.get_world('fantasy_world') # 'fantasy_world.json' のデータを丸ごと読み込む
 
     def _build_system_prompt(self, session: "GameSession") -> str:
         """AIに与える役割や背景情報を定義するシステムプロンプトを構築する。"""
@@ -118,39 +121,31 @@ class AIService:
 
     def _build_messages(self, session: "GameSession", user_input: str) -> list[dict]:
         """AIに送信するメッセージのリストを構築する。"""
-        messages = [{"role": "system", "content": self._build_system_prompt(session)}]
-        history = []
+        messages = []
         # 過去の対話履歴を追加
         for entry in session.conversation_history:
-            # Geminiのロールは 'user' と 'model'
-            role = "model" if entry["role"] == "assistant" else entry["role"]
-            history.append({"role": role, "parts": [entry["content"]]})
+            messages.append({"role": entry["role"], "content": entry["content"]})
             
         # 今回のプレイヤーの行動を追加
-        history.append({"role": "user", "parts": [user_input]})
+        messages.append({"role": "user", "content": user_input})
         
-        return history
+        return messages
 
     async def generate_game_response(self, session: "GameSession", user_input: str) -> Dict[str, Any]:
         """
         プレイヤーの入力に基づき、AIからゲームの応答を生成します。
         """
         system_prompt = self._build_system_prompt(session)
-        history = self._build_messages(session, user_input)
-
-        model = genai.GenerativeModel(
-            self.model_name,
-            system_instruction=system_prompt,
-            generation_config=genai.types.GenerationConfig(
-                response_mime_type="application/json"
-            )
-        )
+        messages = self._build_messages(session, user_input)
 
         try:
-            # 会話履歴を使って応答を生成
-            chat_session = model.start_chat(history=history[:-1]) # 最後のユーザー入力を除く
-            response = await chat_session.send_message_async(history[-1]["parts"])
-            
-            return json.loads(response.text)
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": system_prompt}] + messages,
+                temperature=0.7,
+                response_format={"type": "json_object"},
+            )
+            response_content = response.choices[0].message.content
+            return json.loads(response_content)
         except Exception as e:
             raise AIConnectionError(f"AIからの応答生成に失敗しました: {e}") from e
