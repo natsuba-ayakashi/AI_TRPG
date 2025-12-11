@@ -8,6 +8,8 @@ import asyncio
 from core.errors import GameError, FileOperationError, CharacterNotFoundError, AIConnectionError
 from infrastructure.repositories.settings_repository import SettingsRepository
 from bot.ui.embeds import create_command_list_embed
+from bot import messaging
+from config.settings import GUILD_SETTINGS_FILE_PATH
 
 # --- 型チェック用の前方参照 ---
 from typing import TYPE_CHECKING
@@ -15,10 +17,9 @@ if TYPE_CHECKING:
     from game.services.game_service import GameService
     from game.services.character_service import CharacterService
     from infrastructure.data_loaders.world_data_loader import WorldDataLoader
+    from core.event_bus import EventBus
+    from game.models.session import GameSession
     from bot.cogs.game_commands import GameCommandsCog
-
-# --- 定数 ---
-GUILD_SETTINGS_PATH = "game_data/guild_settings.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,13 +31,18 @@ class MyBot(commands.Bot):
         self,
         world_data_loader: "WorldDataLoader",
         channel_ids: dict[str, int],
+        game_service: "GameService",
+        character_service: "CharacterService",
+        event_bus: "EventBus",
     ):
         super().__init__(command_prefix="!", intents=intents, case_insensitive=True)
-        # 依存性注入によって後から設定されるプロパティ
-        self.game_service: "GameService" = None
-        self.character_service: "CharacterService" = None
+        # --- 依存関係の注入 (DI) ---
+        # コンストラクタでサービスを受け取ることで、Botインスタンスは常に完全な状態で生成される
+        self.game_service: "GameService" = game_service
+        self.character_service: "CharacterService" = character_service
+        self.event_bus: "EventBus" = event_bus
         self.world_data_loader: "WorldDataLoader" = world_data_loader
-        self.settings_repo = SettingsRepository(GUILD_SETTINGS_PATH)
+        self.settings_repo = SettingsRepository(GUILD_SETTINGS_FILE_PATH)
 
         # 設定値
         self.CHAR_SHEET_CHANNEL_ID = channel_ids.get("CHAR_SHEET_CHANNEL_ID", 0)
@@ -124,40 +130,37 @@ class MyBot(commands.Bot):
                 # await bgm_manager.stop_bgm(member.guild)
                 await voice_client.disconnect()
 
-    async def on_message(self, message: discord.Message):
-        """スレッド内のメッセージをリッスンし、ゲームを進行させる"""
-        # --- メッセージを処理すべきかどうかの事前チェック ---
+    def _is_relevant_message(self, message: discord.Message) -> bool:
+        """メッセージを処理すべきかどうかの事前チェック"""
+        # ボットからのメッセージは無視
         if message.author.bot:
-            return
-        if not message.guild or isinstance(message.channel, discord.DMChannel):
-            return
+            return False
+        # DMやカテゴリ外のチャンネルは無視
+        if not message.guild or not isinstance(message.channel, (discord.TextChannel, discord.Thread)):
+            return False
+        return True
 
-        # まずコマンドを処理させ、コマンドでない場合にのみゲーム進行処理を行う
-        ctx = await self.get_context(message)
-        if ctx.valid:
-             await self.process_commands(message)
-             return
+    async def _handle_game_response(self, channel: discord.abc.Messageable, response_data: dict, user_id: int, user_input: str):
+        """AIからの応答を解釈し、Cogの共通ハンドラに処理を委譲する。"""
+        cog: "GameCommandsCog" = self.get_cog("ゲーム管理")
+        if cog:
+            await cog._handle_response(channel, response_data, user_id, user_input)
+        else:
+            logging.warning("GameCommandsCogが見つかりません。on_messageからの応答処理をスキップします。")
+            narrative = response_data.get("narrative")
+            if narrative:
+                await channel.send(narrative)
 
-        # 対応するゲームセッションをスレッドIDから取得
-        session = self.game_service.sessions.get_session_by_thread_id(message.channel.id)
-        if not session:
-            # ゲーム中でないスレッドでの発言は何もしない
-            await self.process_commands(message) # 通常のコマンドとして処理を試みる
-            return
-
-        # --- ゲーム進行処理 ---
-        # プレイヤーの行動であるとみなし、ゲームを進行させる
-        # ロックを取得して、多重実行を防ぐ
+    async def _process_game_turn(self, message: discord.Message, session: "GameSession"):
+        """ một lượt chơi game を処理し、応答を送信する"""
         lock = self.game_service.sessions.get_lock(session.user_id)
+        if lock.locked():
+            # 既に処理が実行中の場合は、リアクションで通知する（任意）
+            await message.add_reaction("⏳")
+            return
+
         async with lock:
             try:
-                # Cogを取得
-                game_cog: "GameCommandsCog" = self.get_cog("ゲーム管理")
-                if not game_cog:
-                    logging.warning("GameCommandsCogが見つかりません。on_messageからの応答処理をスキップします。")
-                    return
-
-                # 処理中であることをユーザーに示す
                 user_input = message.clean_content
                 async with message.channel.typing():
                     response_data = await self.game_service.proceed_game(
@@ -165,39 +168,72 @@ class MyBot(commands.Bot):
                         user_input=user_input
                     )
                 
-                # Cogのヘルパーメソッドを呼び出して応答を処理
-                await game_cog._handle_response(message.channel, response_data, session.user_id, user_input)
+                await self._handle_game_response(message.channel, response_data, session.user_id, user_input)
 
             except GameError as e:
                 await message.channel.send(f"ゲームエラー: {e}")
-            except Exception as e:
-                logging.exception(f"on_messageでの予期せぬエラー (Channel: {message.channel.id})")
+            except Exception:
+                logging.exception(f"ゲーム進行中の予期せぬエラー (Channel: {message.channel.id})")
                 await message.channel.send("予期せぬエラーが発生しました。")
+
+    async def on_message(self, message: discord.Message):
+        """スレッド内のメッセージをリッスンし、ゲームを進行させる"""
+        if not self._is_relevant_message(message):
+            return
+
+        ctx = await self.get_context(message)
+        if ctx.valid:
+            return await self.process_commands(message)
+
+        session = self.game_service.sessions.get_session_by_thread_id(message.channel.id)
+        if session:
+            await self._process_game_turn(message, session)
+
+    async def _get_error_user_message(self, error: Exception) -> str:
+        """
+        例外オブジェクトからユーザーに表示するためのフレンドリーなエラーメッセージを生成する。
+        """
+        original_error = getattr(error, 'original', error)
+
+        if isinstance(original_error, FileOperationError):
+            return messaging.error_file_operation(original_error)
+        if isinstance(original_error, CharacterNotFoundError):
+            return messaging.error_data_not_found(original_error)
+        if isinstance(original_error, AIConnectionError):
+            return messaging.MSG_AI_CONNECTION_ERROR
+        if isinstance(original_error, GameError):
+            return messaging.error_game_error(original_error)
+        if isinstance(error, app_commands.CommandOnCooldown):
+            return messaging.error_command_on_cooldown(error.retry_after)
+        if isinstance(error, app_commands.MissingPermissions):
+            return messaging.MSG_MISSING_PERMISSIONS
         
-        # 念のため、最後にコマンド処理を試みる
-        await self.process_commands(message)
+        # マッピングにない未知のエラー
+        return messaging.MSG_UNEXPECTED_ERROR
 
-    async def on_error(self, event_method: str, *args, **kwargs):
-        """グローバルエラーハンドラ"""
-        if event_method == 'on_app_command_error':
-            interaction: discord.Interaction = args[0]
-            error: app_commands.AppCommandError = args[1]
-            original_error = getattr(error, 'original', error)
-            logging.exception(f"コマンド '{interaction.command.name if interaction.command else 'N/A'}' でエラー: {original_error}")
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """スラッシュコマンドで発生したエラーのグローバルハンドラ。"""
+        command_name = interaction.command.name if interaction.command else "不明なコマンド"
+        
+        # ログにはスタックトレース付きで詳細なエラーを出力
+        logging.exception(f"スラッシュコマンド '{command_name}' の実行中にエラーが発生しました。")
 
-            error_map = {
-                FileOperationError: f"ファイルの処理中にエラーが発生しました。\n詳細: {original_error}",
-                CharacterNotFoundError: f"指定されたデータが見つかりませんでした。\n詳細: {original_error}",
-                AIConnectionError: "AIとの通信に失敗しました。時間をおいて再度試してください。(APIの利用制限に達したか、サーバーが混み合っている可能性があります)",
-                GameError: f"エラーが発生しました: {original_error}",
-                app_commands.CommandOnCooldown: f"コマンドはクールダウン中です。{error.retry_after:.2f}秒後にもう一度試してください。",
-                app_commands.MissingPermissions: "コマンドの実行に必要な権限がありません。"
-            }
-            user_message = next((msg for err_type, msg in error_map.items() if isinstance(original_error, err_type)), "予期せぬエラーが発生しました。")
+        # ユーザー向けのメッセージを生成
+        user_message = await self._get_error_user_message(error)
 
+        # ユーザーに応答
+        try:
             if interaction.response.is_done():
                 await interaction.followup.send(user_message, ephemeral=True)
             else:
                 await interaction.response.send_message(user_message, ephemeral=True)
-        else:
-            logging.exception(f"未処理のイベントエラー: {event_method}")
+        except discord.HTTPException as e:
+            logging.error(f"エラーメッセージの送信に失敗しました: {e}")
+
+    async def on_error(self, event_method: str, *args, **kwargs):
+        """
+        on_app_command_error やコマンドハンドラで捕捉されなかった、
+        他のイベントハンドラ (on_message, on_readyなど) で発生したエラーを処理する。
+        """
+        logging.exception(f"イベント '{event_method}' の処理中に未捕捉の例外が発生しました。")
+        # ここで開発者に通知する処理（例：DMを送信する）などを追加することもできる。

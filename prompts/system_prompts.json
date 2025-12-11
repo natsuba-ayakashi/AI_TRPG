@@ -42,7 +42,9 @@
     "response_format": {
         "header": "### 応答フォーマット\nあなたの応答は、必ず以下の構造を持つJSON形式でなければなりません。",
         "body": {
-            "narrative": "生成された導入シナリオのテキスト。"
+            "narrative": "生成された導入シナリオのテキスト。",
+            "final_boss_id": "秘密裏に選んだ最終ボスのID。",
+            "quest_chain_ids": "最終ボスに至るまでのクエストIDの配列。"
         }
     }
   }

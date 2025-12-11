@@ -1,8 +1,11 @@
 import uuid
 from typing import Dict, Any, List, TYPE_CHECKING
+import logging
 
 from game.models.character import Character
 from core.errors import CharacterNotFoundError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from infrastructure.repositories.file_repository import FileRepository
@@ -39,8 +42,8 @@ class CharacterService:
         character = Character(char_data)
 
         # Repositoryを介してデータを保存
-        await self.repository.save(user_id, character.name, character.to_dict())
-        print(f"ユーザー({user_id})の新規キャラクター「{character.name}」を保存しました。")
+        await self.repository.save(character.user_id, character.name, character.to_dict())
+        logger.info(f"ユーザー({character.user_id})の新規キャラクター「{character.name}」を保存しました。")
         return character
 
     async def get_character(self, user_id: int, char_name: str) -> Character:
@@ -59,12 +62,12 @@ class CharacterService:
         """
         return await self.repository.list_saves(user_id)
 
-    async def save_character(self, user_id: int, character: Character):
+    async def save_character(self, character: Character):
         """
         キャラクターオブジェクトの状態を永続化します。
         """
-        await self.repository.save(user_id, character.name, character.to_dict())
-        print(f"ユーザー({user_id})のキャラクター「{character.name}」の状態を保存しました。")
+        await self.repository.save(character.user_id, character.name, character.to_dict())
+        logger.info(f"ユーザー({character.user_id})のキャラクター「{character.name}」の状態を保存しました。")
 
     async def delete_character(self, user_id: int, char_name: str) -> bool:
         """
@@ -75,5 +78,5 @@ class CharacterService:
         """
         success = await self.repository.delete(user_id, char_name)
         if success:
-            print(f"ユーザー({user_id})のキャラクター「{char_name}」を削除しました。")
+            logger.info(f"ユーザー({user_id})のキャラクター「{char_name}」を削除しました。")
         return success

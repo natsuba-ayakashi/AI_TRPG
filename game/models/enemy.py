@@ -33,6 +33,11 @@ class Enemy:
         # --- 報酬 ---
         self.rewards: Dict[str, Any] = base_data.get('rewards', {})
 
+    @property
+    def attack_power(self) -> int:
+        """攻撃力を計算します (STR)。"""
+        return self.stats.get("STR", 10)
+
     def take_damage(self, amount: int):
         """HPにダメージを受けます。HPは0未満にはなりません。"""
         self.hp = max(0, self.hp - amount)

@@ -1,8 +1,24 @@
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 # .envファイルから環境変数を読み込む
 load_dotenv()
+
+# --- プロジェクトパス設定 ---
+# このファイル (settings.py) の親ディレクトリ (config) のさらに親がプロジェクトルート
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# --- データパス設定 ---
+GAME_DATA_DIR = PROJECT_ROOT / "game_data"
+WORLDS_DATA_PATH = GAME_DATA_DIR / "worlds"
+CHARACTERS_DATA_PATH = GAME_DATA_DIR / "characters"
+WORLD_STATE_FILE_PATH = GAME_DATA_DIR / "world_state.json"
+GUILD_SETTINGS_FILE_PATH = GAME_DATA_DIR / "guild_settings.json"
+GAME_LOG_FILE_PATH = GAME_DATA_DIR / "logs" / "game_events.log"
+
+PROMPTS_DIR = PROJECT_ROOT / "prompts"
+SYSTEM_PROMPTS_FILE_PATH = PROMPTS_DIR / "system_prompts.json"
 
 def get_env_var(key: str, default: str = None) -> str:
     """環境変数を取得します。見つからない場合はデフォルト値を返すか、例外を発生させます。"""
@@ -27,3 +43,6 @@ LOCAL_AI_MODEL_NAME = get_env_var("AI_MODEL_NAME", "deepseek-r1:latest") # Ollam
 
 # --- 画像生成AI関連 (任意) ---
 # IMAGE_GEN_API_URL = get_env_var("IMAGE_GEN_API_URL", default=None) # 例: "http://127.0.0.1:7860/sdapi/v1/txt2img"
+
+# --- ゲームバランス設定 ---
+MAX_REROLLS_ON_CREATION = int(get_env_var("MAX_REROLLS_ON_CREATION", "3"))

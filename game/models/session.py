@@ -1,73 +1,174 @@
-from typing import Dict, Any, Optional, TYPE_CHECKING
-from collections import deque
-import copy
+import datetime
+from typing import List, Dict, Any, Optional
 
-if TYPE_CHECKING:
-    from .character import Character
-    from .enemy import Enemy
-    from infrastructure.data_loaders.world_data_loader import WorldDataLoader
+from .character import Character
+# Note: The 'Enemy' model is assumed to exist for type hinting.
+# You may need to create 'game/models/enemy.py' if it doesn't exist.
+from .enemy import Enemy
+
 
 class GameSession:
-    """個々のゲームセッションの状態を管理するデータクラス"""
-    def __init__(self, user_id: int, character: "Character", thread_id: int, initial_npc_states: Dict):
+    """
+    Holds the state of an active game session.
+    This object lives only in memory and is not persisted to disk.
+    """
+
+    def __init__(self, user_id: int, character: Character, world_name: str):
+        """
+        Initializes a GameSession.
+
+        Args:
+            user_id: The Discord user ID of the player.
+            character: The character object the player is using.
+            world_name: The name of the world the game is set in.
+        """
         self.user_id: int = user_id
-        self.character: "Character" = character
-        self.thread_id: int = thread_id
-        self.state: str = 'playing'  # 'playing', 'confirming_continue' など
-        self.last_response: Optional[Dict] = None
-        self.gm_personality: Optional[str] = None # プレイヤーが選択したGM人格
-        self.current_npc_id: Optional[str] = None # 現在対話中のNPCのID
-        self.npc_states: Dict[str, Dict[str, Any]] = copy.deepcopy(initial_npc_states) # 世界のNPC状態をセッションにコピー
-        self.difficulty_level: int = 1 # 動的難易度レベル
-        self.is_difficulty_manual: bool = False # 難易度が手動設定されたか
-        self.triggered_event_info: Optional[str] = None # 時間で発生したイベント情報
+        self.character: Character = character
+        self.world_name: str = world_name
 
-        # --- 戦闘関連 ---
-        self.in_combat: bool = False # 戦闘中フラグ
-        self.current_enemies: list["Enemy"] = [] # 現在戦闘中の敵リスト
-        self.combat_turn: str = "player" # 'player' or 'enemy'
-        self.victory_prompt: Optional[str] = None # 戦闘勝利時の特別なプロンプト
-
-        # --- 時間管理 ---
-        self.time_units: int = 0 # 内部的な時間単位カウンター
-        self.day: int = 1
-        self.time_of_day: str = "朝" # 朝 -> 昼 -> 夕 -> 夜
-        self.TIME_CYCLE = ["朝", "昼", "夕", "夜"]
-
-        # --- 対話履歴 ---
-        self.conversation_history: deque = deque(maxlen=10) # 直近10件のやり取りを保持
-
-    def advance_time(self, world_data_loader: "WorldDataLoader", units: int = 1):
-        """指定された単位だけ時間を進め、日付と時間帯を更新する"""
-        self.time_units += units
+        # The thread_id is associated later, after the thread is created on Discord.
+        self.thread_id: Optional[int] = None
         
-        units_per_day = len(self.TIME_CYCLE)
+        # The player's current location ID within the world.
+        self.current_location_id: Optional[str] = None
+
+        # The main story arc for this session.
+        self.final_boss_id: Optional[str] = None
+        self.quest_chain_ids: List[str] = []
+
+        self.start_time: datetime.datetime = datetime.datetime.now()
+        self.turn_count: int = 0
+
+        # Conversation history with the AI.
+        self.conversation_history: List[Dict[str, str]] = []
+
+        # NPC state changes within this session.
+        self.npc_states: Dict[str, Any] = {}
+
+        # Combat-related state.
+        self.in_combat: bool = False
+        self.current_enemies: List[Enemy] = []
+        self.combat_turn: str = "player"  # "player" or "enemy"
+        self.combat_view_message_id: Optional[int] = None
+
+    def add_history(self, role: str, content: str):
+        """
+        Adds a new entry to the conversation history.
+        Removes the oldest entry if the history becomes too long.
+        """
+        # Limit history to a maximum of 20 entries.
+        if len(self.conversation_history) >= 20:
+            self.conversation_history.pop(0)
+        self.conversation_history.append({"role": role, "content": content})
+
+    def start_combat(self, enemies: List[Enemy]):
+        """Starts combat mode."""
+        self.in_combat = True
+        self.current_enemies = enemies
+        self.combat_turn = "player"  # Always start with the player's turn.
+
+    def end_combat(self):
+        """Ends combat mode."""
+        self.in_combat = False
+        self.current_enemies = []
+
+    def apply_ai_response(self, user_input: str, response_data: Dict[str, Any], world_data: Dict[str, Any]):
+        """
+        AIからの応答を解釈し、セッションの状態を更新します。
         
-        self.day = 1 + (self.time_units // units_per_day)
-        self.time_of_day = self.TIME_CYCLE[self.time_units % units_per_day]
-        
-        self._check_timed_events(world_data_loader)
+        Args:
+            user_input: プレイヤーの入力。
+            response_data: AIからの応答データ。
+            world_data: 現在の世界の静的データ（敵情報の参照などに使用）。
+        """
+        # ターン数をインクリメント
+        self.turn_count += 1
 
-    def _check_timed_events(self, world_data_loader: "WorldDataLoader"):
-        """現在の時刻に合致する時限イベントがあるか確認する"""
-        self.triggered_event_info = None
-        timed_events = world_data_loader.get('fantasy_world', 'timed_events')
-        if not timed_events:
-            return
+        # 1. 会話履歴の更新
+        if narrative := response_data.get("narrative"):
+            self.add_history("user", user_input)
+            self.add_history("assistant", narrative)
 
-        for event_id, event_data in timed_events.items():
-            trigger = event_data.get('trigger', {})
-            day_match = ('day' in trigger and self.day == trigger['day']) or \
-                        ('day_modulo' in trigger and self.day % trigger['day_modulo'] == 0)
-            time_match = 'time_of_day' in trigger and self.time_of_day == trigger['time_of_day']
+        # 2. 状態変化の適用
+        if state_changes := response_data.get("state_changes"):
+            previous_level = self.character.level
+            # キャラクター関連の更新を委譲
+            self.character.apply_state_changes(state_changes)
 
-            if day_match and time_match:
-                self.triggered_event_info = event_data['action']['details']['narrative']
-                break
+            # レベルアップ時のスキル習得チェック
+            if self.character.level > previous_level:
+                new_skills = self.character.check_new_skills(world_data)
+                if new_skills:
+                    state_changes["new_skills"] = new_skills
 
-    def switch_combat_turn(self):
-        """戦闘のターンを切り替えます。"""
-        if self.combat_turn == "player":
-            self.combat_turn = "enemy"
-        else:
-            self.combat_turn = "player"
+            # 場所の移動
+            if new_location_id := state_changes.get("location_change"):
+                self.current_location_id = new_location_id
+
+            # 敵の攻撃処理 (システムによるダメージ計算)
+            if enemy_actions := state_changes.get("enemy_actions"):
+                total_damage = 0
+                for action in enemy_actions:
+                    enemy_id = action.get("enemy_id")
+                    # インスタンスIDまたは定義IDで敵を検索
+                    enemy = next((e for e in self.current_enemies if e.instance_id == enemy_id or e.enemy_id == enemy_id), None)
+                    if enemy and action.get("type") == "attack":
+                        # ダメージ計算: 攻撃力 - 防御力 (最低1)
+                        damage = max(1, enemy.attack_power - self.character.defense)
+                        self.character.take_damage(damage)
+                        total_damage += damage
+                
+                # ログ出力用にhp_changeを更新 (負の値として加算)
+                if total_damage > 0:
+                    current_hp_change = state_changes.get("hp_change", 0)
+                    state_changes["hp_change"] = current_hp_change - total_damage
+
+            # NPCの状態更新
+            if npc_updates := state_changes.get("npc_updates"):
+                for npc_id, updates in npc_updates.items():
+                    if npc_id not in self.npc_states:
+                        self.npc_states[npc_id] = {}
+                    self.npc_states[npc_id].update(updates)
+            
+            # 戦闘状態の更新
+            if combat_update := state_changes.get("combat"):
+                if combat_update.get("status") == "start":
+                    enemy_ids = combat_update.get("enemies", [])
+                    all_enemies_data = world_data.get("enemies", {})
+                    enemies_to_start = []
+                    for enemy_id in enemy_ids:
+                        if enemy_base_data := all_enemies_data.get(enemy_id):
+                            enemies_to_start.append(Enemy(enemy_base_data))
+                    if enemies_to_start:
+                        self.start_combat(enemies_to_start)
+                elif combat_update.get("status") == "end":
+                    # 戦闘終了時の報酬処理
+                    total_xp = 0
+                    total_gold = 0
+                    collected_items = []
+
+                    for enemy in self.current_enemies:
+                        rewards = enemy.rewards
+                        total_xp += rewards.get("xp", 0)
+                        total_gold += rewards.get("gold", 0)
+                        if items := rewards.get("items"):
+                            collected_items.extend(items)
+
+                    if total_xp > 0:
+                        prev_level = self.character.level
+                        self.character.add_xp(total_xp)
+                        state_changes["xp_gain"] = state_changes.get("xp_gain", 0) + total_xp
+                        if self.character.level > prev_level:
+                            if new_skills := self.character.check_new_skills(world_data):
+                                state_changes["new_skills"] = state_changes.get("new_skills", []) + new_skills
+
+                    if total_gold > 0:
+                        self.character.gold += total_gold
+                        state_changes["gold_change"] = state_changes.get("gold_change", 0) + total_gold
+
+                    if collected_items:
+                        for item in collected_items:
+                            self.character.add_item(item)
+                        state_changes["new_items"] = state_changes.get("new_items", []) + collected_items
+
+                    self.end_combat()

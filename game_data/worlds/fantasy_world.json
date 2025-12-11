@@ -5,17 +5,32 @@
       {
         "name": "人間",
         "description": "最も数が多く、多様な能力を持つ種族。",
-        "bonus": { "stat": "CHA", "value": 1 }
+        "bonus": { "stat": "CHA", "value": 1 },
+        "starting_items": ["水筒", "保存食", "松明"]
       },
       {
         "name": "エルフ",
         "description": "森に住む長寿の種族。俊敏さと知性に優れる。",
-        "bonus": { "stat": "DEX", "value": 1 }
+        "bonus": { "stat": "DEX", "value": 1 },
+        "starting_items": ["水筒", "保存食", "薬草"]
       },
       {
         "name": "ドワーフ",
         "description": "山脈に住む頑健な種族。手先が器用で力持ち。",
-        "bonus": { "stat": "CON", "value": 1 }
+        "bonus": { "stat": "CON", "value": 1 },
+        "starting_items": ["水筒", "保存食", "つるはし"]
+      },
+      {
+        "name": "ハーフリング",
+        "description": "小柄で陽気な種族。幸運に恵まれ、身のこなしが軽い。",
+        "bonus": { "stat": "DEX", "value": 1 },
+        "starting_items": ["水筒", "保存食", "煙草"]
+      },
+      {
+        "name": "オーク",
+        "description": "緑色の肌と強靭な肉体を持つ種族。力強く、戦いを好む。",
+        "bonus": { "stat": "STR", "value": 1 },
+        "starting_items": ["水筒", "干し肉", "火打ち石"]
       }
     ],
     "classes": [
@@ -25,8 +40,10 @@
         "skills": [
           { "level": 2, "name": "強撃", "description": "次の物理攻撃のダメージを増加させる。", "type": "active" },
           { "level": 3, "name": "挑発", "description": "敵の注意を自分に引きつけ、仲間を守る。", "type": "active" },
-          { "level": 4, "name": "シールドバッシュ", "description": "盾で敵を強打し、一定確率で気絶させる。", "type": "active", "effect": "stun" }
-        ]
+          { "level": 4, "name": "シールドバッシュ", "description": "盾で敵を強打し、一定確率で気絶させる。", "type": "active", "effect": "stun" },
+          { "level": 10, "name": "ベルセルク", "description": "理性を捨てて攻撃力を大幅に上げるが、防御力が下がる。", "type": "buff" }
+        ],
+        "starting_items": ["錆びた剣", "木の盾", "ポーション"]
       },
       {
         "name": "魔術師",
@@ -35,8 +52,10 @@
           { "level": 2, "name": "ファイアボール", "description": "火の玉を放ち、敵単体にダメージを与える。", "type": "active", "cost": { "mp": 5 } },
           { "level": 3, "name": "ヒール", "description": "味方単体のHPを回復する。", "type": "active", "cost": { "mp": 8 } },
           { "level": 4, "name": "ライトニングボルト", "description": "強力な稲妻を放ち、敵単体に大ダメージを与える。", "type": "active", "cost": { "mp": 12 } },
-          { "level": 5, "name": "マジックシールド", "description": "魔法の盾で身を守り、次のターンに受けるダメージを軽減する。", "type": "defensive", "cost": { "mp": 10 } }
-        ]
+          { "level": 5, "name": "マジックシールド", "description": "魔法の盾で身を守り、次のターンに受けるダメージを軽減する。", "type": "defensive", "cost": { "mp": 10 } },
+          { "level": 10, "name": "メテオストライク", "description": "空から隕石を召喚し、敵全体に壊滅的なダメージを与える。", "type": "active", "cost": { "mp": 20 } }
+        ],
+        "starting_items": ["樫の杖", "魔法のスクロール", "ポーション"]
       },
       {
         "name": "盗賊",
@@ -45,8 +64,43 @@
           { "level": 2, "name": "隠れる", "description": "敵の視界から隠れ、次の攻撃を有利にする。", "type": "active" },
           { "level": 3, "name": "毒の一撃", "description": "武器に毒を塗り、追加の継続ダメージを与える攻撃を行う。", "type": "active" },
           { "level": 4, "name": "二刀流", "description": "二本の武器を巧みに操り、通常攻撃時に追加の攻撃を行うことがある。", "type": "passive" },
-          { "level": 5, "name": "罠設置", "description": "地面に罠を設置し、敵が踏むとダメージと移動阻害効果を与える。", "type": "active" }
-        ]
+          { "level": 5, "name": "罠設置", "description": "地面に罠を設置し、敵が踏むとダメージと移動阻害効果を与える。", "type": "active" },
+          { "level": 10, "name": "暗殺", "description": "敵の急所を確実に突き、即死させる可能性がある。", "type": "active" }
+        ],
+        "starting_items": ["ダガー", "盗賊道具", "煙玉"]
+      },
+      {
+        "name": "聖職者",
+        "description": "神に祈りを捧げ、傷ついた仲間を癒やし、邪悪を退けるクラス。",
+        "skills": [
+          { "level": 2, "name": "キュアウーンズ", "description": "聖なる力で味方単体のHPを中程度回復する。", "type": "active", "cost": { "mp": 6 } },
+          { "level": 3, "name": "ブレス", "description": "神の祝福を与え、味方単体の攻撃判定を有利にする。", "type": "buff", "cost": { "mp": 8 } },
+          { "level": 4, "name": "ホーリーライト", "description": "聖なる光を放ち、敵単体にダメージを与える。アンデッドには効果絶大。", "type": "active", "cost": { "mp": 10 } },
+          { "level": 10, "name": "リザレクション", "description": "倒れた仲間を蘇生させる。", "type": "active", "cost": { "mp": 30 } }
+        ],
+        "starting_items": ["メイス", "聖印", "ポーション"]
+      },
+      {
+        "name": "狩人",
+        "description": "弓矢を扱い、自然の中で生きる術に長けたクラス。",
+        "skills": [
+          { "level": 2, "name": "精密射撃", "description": "狙いすました一撃で、敵の急所を突く。", "type": "active" },
+          { "level": 3, "name": "自然の知識", "description": "自然界の知識を活かし、探索や追跡を有利に進める。", "type": "passive" },
+          { "level": 4, "name": "マルチショット", "description": "一度に複数の矢を放ち、複数の敵を攻撃する。", "type": "active" },
+          { "level": 10, "name": "アローレイン", "description": "雨のように矢を降らせ、敵全体を攻撃する。", "type": "active" }
+        ],
+        "starting_items": ["ショートボウ", "矢筒", "薬草"]
+      },
+      {
+        "name": "聖騎士",
+        "description": "重装備に身を包み、神の正義を執行する守護者。",
+        "skills": [
+          { "level": 2, "name": "レイ・オン・ハンズ", "description": "手当てを行い、自身または味方のHPを回復する。", "type": "active", "cost": { "mp": 5 } },
+          { "level": 3, "name": "スマイト", "description": "武器に神聖な力を宿し、強力な一撃を見舞う。", "type": "active", "cost": { "mp": 8 } },
+          { "level": 4, "name": "ディバインシールド", "description": "神聖な盾を展開し、あらゆる攻撃を一度だけ無効化する。", "type": "defensive", "cost": { "mp": 15 } },
+          { "level": 10, "name": "ゴッドブレス", "description": "神の加護により、味方全体の全ステータスを上昇させる。", "type": "buff", "cost": { "mp": 25 } }
+        ],
+        "starting_items": ["ロングソード", "鎖帷子", "聖水"]
       }
     ]
   },
@@ -60,22 +114,87 @@
   },
   "items": {
     "ポーション": {
-      "description": "飲むとHPを少し回復する。state_changesで `hp_change` を正の値で返すこと。"
+      "description": "飲むとHPを少し回復する。state_changesで `hp_change` を正の値で返すこと。",
+      "consumable": true
     },
     "錆びた短剣": {
-      "description": "ありふれた古い短剣。"
+      "description": "ありふれた古い短剣。",
+      "equipment_type": "weapon",
+      "stats_bonus": { "STR": 1 }
+    },
+    "松明": {
+      "description": "暗闇を照らすための松明。"
+    },
+    "保存食": {
+      "description": "日持ちする携帯食料。HPをわずかに回復する。"
     },
     "竜の宝玉": {
       "description": "竜王が遺したと言われる伝説の宝玉。計り知れない価値がある。"
     },
     "不死王の冠": {
-      "description": "リッチキングが身に着けていた邪悪な冠。強大な魔力を秘めている。"
+      "description": "リッチキングが身に着けていた邪悪な冠。強大な魔力を秘めている。",
+      "equipment_type": "accessory",
+      "stats_bonus": { "INT": 5, "WIS": 3 }
     },
     "竜の頂への地図の断片": {
       "description": "竜の頂への道が記されているとされる地図の断片。古代の文字で書かれており、このままでは読めない。"
     },
     "太陽の石": {
-      "description": "太陽の力を宿した聖なる石。邪悪な魔力を打ち破る力がある。"
+      "description": "太陽の力を宿した聖なる石。邪悪な魔力を打ち破る力がある。",
+      "equipment_type": "accessory",
+      "stats_bonus": { "WIS": 2 }
+    },
+    "錆びた剣": {
+      "description": "手入れされていない剣。",
+      "equipment_type": "weapon",
+      "stats_bonus": { "STR": 2 }
+    },
+    "木の盾": {
+      "description": "粗末な木の盾。",
+      "equipment_type": "armor",
+      "stats_bonus": { "CON": 1 }
+    },
+    "樫の杖": {
+      "description": "魔力が込められた杖。",
+      "equipment_type": "weapon",
+      "stats_bonus": { "INT": 2 }
+    },
+    "ダガー": {
+      "description": "隠し持つのに適した短剣。",
+      "equipment_type": "weapon",
+      "stats_bonus": { "DEX": 2 }
+    },
+    "メイス": {
+      "description": "聖職者が好んで使う打撃武器。",
+      "equipment_type": "weapon",
+      "stats_bonus": { "STR": 1, "WIS": 1 }
+    },
+    "ショートボウ": {
+      "description": "扱いやすい弓。",
+      "equipment_type": "weapon",
+      "stats_bonus": { "DEX": 2 }
+    },
+    "ロングソード": {
+      "description": "騎士が使う長剣。",
+      "equipment_type": "weapon",
+      "stats_bonus": { "STR": 3 }
+    },
+    "鎖帷子": {
+      "description": "鎖を編んで作られた鎧。",
+      "equipment_type": "armor",
+      "stats_bonus": { "CON": 3 }
+    }
+  },
+  "shops": {
+    "village_shop": {
+      "name": "村の雑貨屋",
+      "location_id": "village",
+      "description": "冒険に必要な基本的な道具を売っている。",
+      "items": [
+        { "name": "ポーション", "price": 10 },
+        { "name": "松明", "price": 5 },
+        { "name": "保存食", "price": 3 }
+      ]
     }
   },
   "enemies": {
@@ -92,7 +211,8 @@
       ],
       "rewards": {
         "xp": 10,
-        "items": ["錆びた短剣"]
+        "items": ["錆びた短剣"],
+        "gold": 5
       }
     },
     "dragon_lord": {
@@ -109,7 +229,8 @@
       ],
       "rewards": {
         "xp": 500,
-        "items": ["竜の宝玉"]
+        "items": ["竜の宝玉"],
+        "gold": 1000
       }
     },
     "lich_king": {
@@ -126,7 +247,8 @@
       ],
       "rewards": {
         "xp": 550,
-        "items": ["不死王の冠"]
+        "items": ["不死王の冠"],
+        "gold": 1200
       }
     },
     "skeleton_knight": {
@@ -140,7 +262,8 @@
       "skills": [],
       "rewards": {
         "xp": 25,
-        "items": []
+        "items": [],
+        "gold": 15
       }
     },
     "ancient_guardian": {
@@ -156,10 +279,61 @@
       ],
       "rewards": {
         "xp": 40,
+        "gold": 50,
         "items": [
           "竜の頂への地図の断片"
         ]
       }
+    },
+    "slime": {
+      "id": "slime",
+      "name": "スライム",
+      "hp": 15,
+      "stats": { "STR": 5, "DEX": 5 },
+      "skills": [
+        { "name": "消化液", "description": "酸性の液を吐きかけ、装備を腐食させる。", "type": "attack" }
+      ],
+      "rewards": { "xp": 5, "items": ["ポーション"], "gold": 3 }
+    },
+    "wolf": {
+      "id": "wolf",
+      "name": "狼",
+      "hp": 20,
+      "stats": { "STR": 10, "DEX": 16 },
+      "skills": [
+        { "name": "噛みつき", "description": "鋭い牙で噛みつき、出血させる。", "type": "attack" }
+      ],
+      "rewards": { "xp": 15, "items": [], "gold": 0 }
+    },
+    "bandit": {
+      "id": "bandit",
+      "name": "盗賊",
+      "hp": 30,
+      "stats": { "STR": 12, "DEX": 14 },
+      "skills": [
+        { "name": "不意打ち", "description": "隙を突いて攻撃し、大ダメージを与える。", "type": "attack" }
+      ],
+      "rewards": { "xp": 20, "items": ["錆びた短剣", "ポーション"], "gold": 25 }
+    },
+    "ogre": {
+      "id": "ogre",
+      "name": "オーガ",
+      "hp": 80,
+      "stats": { "STR": 22, "CON": 20 },
+      "skills": [
+        { "name": "棍棒強打", "description": "巨大な棍棒を振り回し、全体を攻撃する。", "type": "attack" }
+      ],
+      "rewards": { "xp": 100, "items": [], "gold": 40 }
+    },
+    "harpy": {
+      "id": "harpy",
+      "name": "ハーピー",
+      "hp": 50,
+      "stats": { "DEX": 18, "CHA": 14 },
+      "skills": [
+        { "name": "誘惑の歌", "description": "美しい歌声でプレイヤーを魅了し、行動不能にする。", "type": "debuff", "effect": "charm" }
+      ],
+      "rewards": { "xp": 60, "items": [], "gold": 30 }
     }
   },
   "npcs": {
@@ -208,6 +382,21 @@
     "dragon_lord": ["dragon_quest_1", "dragon_quest_2"],
     "lich_king": ["lich_quest_1", "lich_quest_2"]
   },
+  "puzzles": {
+    "ancient_door_riddle": {
+      "id": "ancient_door_riddle",
+      "location_id": "ancient_ruins_entrance",
+      "description": "遺跡の扉には古代の文字でこう刻まれている。『太陽が生まれし時、我は影を落とし、太陽が沈みし時、我は姿を現す。我とは何か？』",
+      "solutions": [
+        { "type": "keyword", "value": "星" },
+        { "type": "keyword", "value": "star" }
+      ],
+      "reward": {
+        "narrative": "扉がゴゴゴと音を立てて開き、奥へと続く道が現れた。",
+        "unlocks_location": "ancient_ruins_hall"
+      }
+    }
+  },
   "final_bosses": [
     "dragon_lord", "lich_king"
   ],
@@ -215,6 +404,17 @@
     "village": {
       "name": "始まりの村",
       "description": "冒険の拠点となる小さな村。",
+      "npcs": ["npc_gardener", "npc_historian"],
+      "is_accessible": true
+    },
+    "ancient_ruins_entrance": {
+      "name": "古代遺跡の入り口",
+      "description": "苔むした石で作られた、巨大な扉がある。",
+      "is_accessible": true
+    },
+    "ancient_ruins_hall": {
+      "name": "古代遺跡の広間",
+      "description": "かつての栄華を思わせる、だだっ広い空間。中央には何かの台座がある。",
       "is_accessible": true
     },
     "dragon_peak": {

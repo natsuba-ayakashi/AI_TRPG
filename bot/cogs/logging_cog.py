@@ -72,6 +72,8 @@ class LoggingCog(commands.Cog, name="ゲームログ"):
             if xp := state_changes.get("xp_gain"): changes_text.append(f"✨ 経験値 +{xp}")
             if hp := state_changes.get("hp_change"): changes_text.append(f"❤️ HP {hp:+}")
             if mp := state_changes.get("mp_change"): changes_text.append(f"💙 MP {mp:+}")
+            if gold := state_changes.get("gold_change"): changes_text.append(f"💰 ゴールド {gold:+}")
+            if skills := state_changes.get("new_skills"): changes_text.append(f"💡 新スキル習得: {', '.join(skills)}")
             if items := state_changes.get("new_items"): changes_text.append(f"획득 アイテム: {', '.join(items)}")
             if quests := state_changes.get("quest_updates"): changes_text.append(f"🗺️ クエスト更新: {', '.join(quests.keys())}")
             if changes_text:
