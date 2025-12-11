@@ -61,9 +61,9 @@ class GameService:
 
     async def start_game(
         self, user_id: int, char_name: str, thread: discord.Thread
-    ) -> GameSession:
+    ) -> Tuple[GameSession, str]:
         """
-        新しいゲームセッションを開始します。
+        新しいゲームセッションを開始し、AIに導入シナリオを生成させます。
 
         Args:
             user_id: ゲームを開始するユーザーのID。
@@ -71,7 +71,7 @@ class GameService:
             thread: ゲームをプレイするスレッド。
 
         Returns:
-            新しく作成されたGameSessionオブジェクト。
+            新しく作成されたGameSessionオブジェクトと、AIが生成した導入シナリオの文字列のタプル。
 
         Raises:
             GameError: ユーザーが既に別のアクティブセッションを持っている場合。
@@ -88,10 +88,14 @@ class GameService:
         # SessionManagerを使用して新しいセッションを作成
         session = self.sessions.create_session(user_id, character, thread.id, world_state.get("npc_states", {}))
         
+        # AI Serviceを呼び出して導入シナリオを生成
+        ai_response = await self.ai.generate_introduction(session)
+        introduction_narrative = ai_response.get("narrative", "冒険が始まります...")
+
         # ゲーム開始イベントを発行
         self.bot.dispatch("game_start", session)
         print(f"ユーザー({user_id})がキャラクター「{char_name}」でゲームを開始しました。")
-        return session
+        return session, introduction_narrative
 
     async def end_game(self, user_id: int):
         """
