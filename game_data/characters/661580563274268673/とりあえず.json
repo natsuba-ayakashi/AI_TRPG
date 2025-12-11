@@ -1,0 +1,29 @@
+{
+    "char_id": "ea03af5b-9c8a-4d62-afa7-9e6bf58e1007",
+    "user_id": 661580563274268673,
+    "name": "とりあえず",
+    "race": "ドワーフ",
+    "class": "戦士",
+    "appearance": "筋骨隆々で小柄な体格",
+    "background": "両親と兄、弟がおり、兄からは疎まれ弟からは慕われている。",
+    "stats": {
+        "STR": 10,
+        "DEX": 6,
+        "CON": 11,
+        "INT": 11,
+        "WIS": 14,
+        "CHA": 16
+    },
+    "skills": {},
+    "level": 1,
+    "xp": 0,
+    "stat_points": 0,
+    "skill_points": 0,
+    "active_quests": [],
+    "completed_quests": [],
+    "inventory": [],
+    "hp": 32,
+    "max_hp": 32,
+    "mp": 32,
+    "max_mp": 32
+}

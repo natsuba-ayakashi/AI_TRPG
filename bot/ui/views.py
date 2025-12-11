@@ -1,7 +1,8 @@
 import discord
+import logging
 from discord import ui
 import random
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 from functools import partial
 
 from game.models.character import Character
@@ -17,26 +18,33 @@ def roll_for_stat():
     rolls = [random.randint(1, 6) for _ in range(4)]
     return sum(sorted(rolls, reverse=True)[:3])
 
+logger = logging.getLogger(__name__)
+
 # --- Game Control Views ---
 
-class ConfirmDeleteView(ui.View):
-    """キャラクター削除の最終確認を行うView"""
-    def __init__(self, author_id: int, bot: "MyBot", char_name: str):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.bot = bot
-        self.char_name = char_name
+class BaseOwnedView(ui.View):
+    """作成者のみが操作できるViewの基底クラス"""
+    def __init__(self, user_id: int, timeout: float = 180):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author_id:
+        if interaction.user.id != self.user_id:
             await interaction.response.send_message(messaging.MSG_ONLY_FOR_COMMAND_USER, ephemeral=True)
             return False
         return True
 
+class ConfirmDeleteView(BaseOwnedView):
+    """キャラクター削除の最終確認を行うView"""
+    def __init__(self, author_id: int, bot: "MyBot", char_name: str):
+        super().__init__(user_id=author_id, timeout=60)
+        self.bot = bot
+        self.char_name = char_name
+
     @ui.button(label="はい、削除します", style=discord.ButtonStyle.danger, custom_id="confirm_delete")
     async def confirm_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            success = await self.bot.character_service.delete_character(self.author_id, self.char_name)
+            success = await self.bot.character_service.delete_character(self.user_id, self.char_name)
             if success:
                 await interaction.response.edit_message(content=messaging.character_deleted(self.char_name), view=None)
             else:
@@ -53,9 +61,9 @@ class ConfirmDeleteView(ui.View):
 class ActionSuggestionView(ui.View):
     """AIから提案された行動をボタンとして提示するView"""
     
-    def __init__(self, actions: List[str], cog: "GameCommandsCog", timeout: int = 300):
+    def __init__(self, actions: List[str], bot: "MyBot", timeout: int = 300):
         super().__init__(timeout=timeout)
-        self.cog = cog
+        self.bot = bot
         self.message: discord.Message = None
         
         # 提案されたアクションごとにボタンを作成
@@ -74,9 +82,13 @@ class ActionSuggestionView(ui.View):
         # viewを更新してボタンを無効化
         await interaction.response.edit_message(view=self)
 
-        # Cogのヘルパーメソッドを呼び出してゲームを進行
-        # このメソッドが新しいメッセージをfollowupで送信する
-        await self.cog._proceed_and_respond(interaction, action)
+        # Cogを取得して、ゲームを進行させるヘルパーを呼び出す
+        cog: "GameCommandsCog" = self.bot.get_cog("ゲーム管理")
+        if cog:
+            # このメソッドが新しいメッセージをfollowupで送信する
+            await cog._proceed_and_respond_from_interaction(interaction, action)
+        else:
+            logger.warning("ActionSuggestionView: GameCommandsCogが見つかりませんでした。")
         
         self.stop()
 
@@ -86,137 +98,35 @@ class ActionSuggestionView(ui.View):
             item.disabled = True
         
         if self.message:
-            # メッセージにタイムアウトした旨を追記する
-            original_content = self.message.content
-            if "（時間切れです）" not in original_content:
-                 await self.message.edit(content=original_content + "\n\n*（時間切れのため、選択肢は無効になりました）*", view=self)
+            try:
+                # メッセージにタイムアウトした旨を追記する
+                original_content = self.message.content
+                if "（時間切れです）" not in original_content:
+                    await self.message.edit(content=original_content + "\n\n*（時間切れのため、選択肢は無効になりました）*", view=self)
+            except discord.HTTPException as e:
+                # スレッドがアーカイブされている場合(50083)など、編集に失敗することがある
+                # その場合はログに記録するだけで、クラッシュはさせない
+                logger.warning(f"タイムアウトメッセージの編集に失敗しました (Code: {e.code}): {e.text}")
+            except Exception as e:
+                logger.error(f"タイムアウトメッセージの編集中に予期せぬエラーが発生しました。", exc_info=e)
         self.stop()
 
 
 # --- Character Creation Views & Modals ---
 
-
-class StatsAllocationView(ui.View):
-    """能力値の割り振りを管理するView"""
-    def __init__(self, author: discord.User, rolls: list, parent_view, bot: "MyBot"):
-        super().__init__(timeout=300)
-        self.author = author
-        self.bot = bot
-        self.rolls = rolls
-        self.parent_view = parent_view
-        self.stats_to_assign = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
-        self.assignments = {}
-        self.selected_stat = None
-        self.selected_roll = None
-        self.message: discord.Message = None
-
-        # UIコンポーネントの初期化
-        self.stat_select = ui.Select(placeholder="割り振る能力値を選択...", custom_id="stat_select")
-        self.stat_select.callback = self.on_stat_select
-        self.add_item(self.stat_select)
-
-        self.roll_select = ui.Select(placeholder="割り振るダイス結果を選択...", custom_id="roll_select", disabled=True)
-        self.roll_select.callback = self.on_roll_select
-        self.add_item(self.roll_select)
-
-        self.assign_button = ui.Button(label="割り振り", style=discord.ButtonStyle.secondary, custom_id="assign_button", disabled=True)
-        self.assign_button.callback = self.on_assign
-        self.add_item(self.assign_button)
-
-        self.confirm_button = ui.Button(label="割り振りを確定", style=discord.ButtonStyle.primary, custom_id="confirm_stats", disabled=True, row=2)
-        self.confirm_button.callback = self.on_confirm_assignments
-        self.add_item(self.confirm_button)
-
-        self.update_selects()
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(messaging.MSG_ONLY_FOR_COMMAND_USER, ephemeral=True)
-            return False
-        return True
-
-    def update_selects(self):
-        """セレクトメニューの選択肢と状態を更新する"""
-        # 能力値選択メニューの更新
-        unassigned_stats = [s for s in self.stats_to_assign if s not in self.assignments]
-        if unassigned_stats:
-            self.stat_select.options = [discord.SelectOption(label=s) for s in unassigned_stats]
-        else:
-            self.stat_select.options = [discord.SelectOption(label="全ての能力値を割り振りました", value="all_assigned", default=True)]
-        self.stat_select.disabled = not unassigned_stats
-
-        # ダイス結果選択メニューの更新
-        assigned_rolls = set(self.assignments.values())
-        
-        # 割り当て済みのロールをカウント
-        from collections import Counter
-        assigned_counts = Counter(assigned_rolls)
-        
-        # 未割り当てのロールをインデックス付きで管理
-        unassigned_rolls_with_indices = []
-        total_counts = Counter(self.rolls)
-        for roll, total_count in total_counts.items():
-            assigned_count = assigned_counts.get(roll, 0)
-            for i in range(assigned_count, total_count):
-                unassigned_rolls_with_indices.append((roll, i))
-
-        # labelはロールの値、valueは "ロール_インデックス" 形式で一意にする
-        self.roll_select.options = [discord.SelectOption(label=str(roll), value=f"{roll}_{idx}") for roll, idx in sorted(unassigned_rolls_with_indices, key=lambda x: x[0], reverse=True)]
-        self.roll_select.disabled = not self.selected_stat or not unassigned_rolls_with_indices
-
-        # ボタンの状態更新
-        self.assign_button.disabled = not (self.selected_stat and self.selected_roll)
-        self.confirm_button.disabled = len(self.assignments) != len(self.stats_to_assign)
-
-    async def on_stat_select(self, interaction: discord.Interaction):
-        self.selected_stat = interaction.data["values"][0]
-        self.update_selects()
-        await interaction.response.edit_message(content=self._get_current_content(), view=self)
-
-    async def on_roll_select(self, interaction: discord.Interaction):
-        # value (e.g., "14_0") からロールの値を取得
-        self.selected_roll = int(interaction.data["values"][0].split('_')[0])
-        self.update_selects()
-        await interaction.response.edit_message(content=self._get_current_content(), view=self)
-
-    async def on_assign(self, interaction: discord.Interaction):
-        if self.selected_stat == "all_assigned": # ダミーオプションが選択された場合は何もしない
-            await interaction.response.send_message("全ての能力値は既に割り振られています。", ephemeral=True)
-            return
-
-        self.assignments[self.selected_stat] = self.selected_roll
-        self.selected_stat = None
-        self.selected_roll = None
-        self.update_selects()
-        await interaction.response.edit_message(content=self._get_current_content(), view=self)
-
-    async def on_confirm_assignments(self, interaction: discord.Interaction):
-        self.parent_view.character_data["stats"] = self.assignments
-        await interaction.response.edit_message(content="能力値を保存しました。最終確認画面を生成します...", view=None)
-        await self.parent_view.show_summary_and_confirm(self.message)
-
-    def _get_current_content(self) -> str:
-        assignment_text = "\n".join([f"- **{stat}**: {val}" for stat, val in sorted(self.assignments.items())])
-        current_selection_text = ""
-        if self.selected_stat and self.selected_stat != "all_assigned": current_selection_text += f"\n**選択中の能力値:** {self.selected_stat}"
-        if self.selected_roll is not None: current_selection_text += f"\n**選択中のダイス結果:** {self.selected_roll}"
-        return (f"ダイスロールの結果を各能力値に割り振ってください。\n\n**現在の割り振り状況:**\n{assignment_text}\n{current_selection_text}")
-
-class CharacterCreationView(ui.View):
+class CharacterCreationView(BaseOwnedView):
     """キャラクター作成の対話フローを管理するView"""
+    MAX_REROLLS = 3 # リロール回数の上限
+
     def __init__(self, author: discord.User, bot: "MyBot"):
-        super().__init__(timeout=300)
+        super().__init__(user_id=author.id, timeout=300)
         self.author = author
         self.bot = bot
         self.character_data = {}
         self.message: discord.Message = None
         self.options = self.bot.world_data_loader.get('fantasy_world', 'creation_options')
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message("キャラクターを作成中の人のみ操作できます。", ephemeral=True) # 少し特殊なメッセージなので維持
-            return False
-        return True
+        self.temp_character: Optional[Character] = None
+        self.reroll_count = 0
 
     @ui.button(label="キャラクター作成を開始", style=discord.ButtonStyle.success, custom_id="start_creation")
     async def start_creation(self, interaction: discord.Interaction, button: ui.Button):
@@ -243,7 +153,8 @@ class CharacterCreationView(ui.View):
 
     async def on_class_selected(self, interaction: discord.Interaction):
         self.character_data["class"] = interaction.data["values"][0]
-        await interaction.response.defer(); await self.prompt_profile_input()
+        await interaction.response.defer()
+        await self.prompt_profile_input()
 
     async def prompt_profile_input(self):
         profile_button = ui.Button(label="プロフィールを入力", style=discord.ButtonStyle.primary)
@@ -251,41 +162,100 @@ class CharacterCreationView(ui.View):
             await interaction.response.send_modal(ProfileInputModal(title="キャラクター作成：プロフィール", view=self))
         profile_button.callback = callback
         self.clear_items(); self.add_item(profile_button)
-        await self.message.edit(content="キャラクターの「外見」や「背景設定」を入力します。", view=self)
+        await self.message.edit(content="キャラクターの「外見」や「背景設定」を入力します。", view=self, embed=None)
 
-    async def prompt_stats_roll(self):
+    async def prompt_stats_decision(self):
+        """能力値決定のステップに進むためのボタンを表示する"""
         roll_button = ui.Button(label="能力値を決める (ダイスロール)", style=discord.ButtonStyle.success)
-        async def callback(interaction: discord.Interaction):
-            rolls = sorted([roll_for_stat() for _ in range(6)], reverse=True)
-            content = f"ダイスロールの結果: **{' '.join(map(str, rolls))}**\n\n値を各能力値に割り振ってください。"
-            allocation_view = StatsAllocationView(self.author, rolls, self, self.bot)
-            await interaction.response.edit_message(content=content, view=allocation_view)
-            allocation_view.message = await interaction.original_response()
-        roll_button.callback = callback
-        self.clear_items(); self.add_item(roll_button)
-        await self.message.edit(content="キャラクターの能力値を決定します。", view=self)
+        roll_button.callback = self.prompt_stats_roll
+        self.clear_items()
+        self.add_item(roll_button)
+        await self.message.edit(content="キャラクターの能力値を決定します。", view=self, embed=None)
 
-    async def show_summary_and_confirm(self, message_to_edit: discord.Message):
-        # Apply race bonus and update the internal state
+    async def prompt_stats_roll(self, interaction: discord.Interaction):
+        """
+        能力値をランダムに決定し、ユーザーに提示する。
+        このメソッドは必ずボタンクリックのインタラクションから呼び出される。
+        """
+        # リロール回数を1増やす
+        self.reroll_count += 1
+        
+        # 1. ダイスロール
+        rolls = [roll_for_stat() for _ in range(6)]
+        
+        # 2. ランダム割り当て
+        stats_to_assign = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
+        random.shuffle(rolls)
+        assigned_stats = dict(zip(stats_to_assign, rolls))
+
+        # 3. 仮のキャラクターオブジェクトを作成してインスタンス変数に保存
+        temp_char_data = self.character_data.copy()
+        temp_char_data["stats"] = assigned_stats
+        
+        self.temp_character = Character(temp_char_data)
+        self.temp_character.apply_race_bonus(self.options.get("races", []))
+        
+        embed = create_character_embed(self.temp_character)
+        
+        # 4. Viewのボタンを更新
+        self.clear_items()
+        confirm_button = ui.Button(label="この能力値で確定する", style=discord.ButtonStyle.primary, custom_id="confirm_stats")
+        confirm_button.callback = self.on_stats_confirmed
+        self.add_item(confirm_button)
+
+        remaining_rerolls = self.MAX_REROLLS - self.reroll_count
+        reroll_disabled = remaining_rerolls < 0
+
+        reroll_button = ui.Button(
+            label=f"リロール（残り {remaining_rerolls if not reroll_disabled else 0} 回）", 
+            style=discord.ButtonStyle.secondary, 
+            custom_id="reroll_stats",
+            disabled=reroll_disabled
+        )
+        reroll_button.callback = self.prompt_stats_roll # 自分自身を再度呼び出す
+        self.add_item(reroll_button)
+        
+        # 5. メッセージをインタラクション応答として編集
+        content = "以下の能力値がランダムに割り振られました。この内容で確定しますか？"
+        await interaction.response.edit_message(content=content, embed=embed, view=self)
+
+    async def on_stats_confirmed(self, interaction: discord.Interaction):
+        """能力値の確定ボタンが押されたときの処理"""
+        if not self.temp_character: return # 万が一のため
+        self.character_data["stats"] = self.temp_character.stats
+        await self.show_summary_and_confirm(interaction)
+
+    async def show_summary_and_confirm(self, interaction: discord.Interaction):
+        # 確定したキャラクターデータから最終的なCharacterオブジェクトを作成
         final_char = Character(self.character_data.copy())
-        final_char.apply_race_bonus(self.options.get("races", []))
-        self.character_data = final_char.to_dict() # Update view's data with final stats
         
         embed = create_character_embed(final_char)
-        final_view = ui.View(timeout=self.timeout)
-        confirm_button = ui.Button(label="この内容で作成", style=discord.ButtonStyle.primary)
-        async def callback(interaction: discord.Interaction): await self.on_confirm(interaction)
-        confirm_button.callback = callback
-        final_view.add_item(confirm_button)
+        final_view = FinalConfirmView(self.author.id, self.bot, self.character_data, self)
         
-        if message_to_edit:
-            await message_to_edit.edit(content="以下の内容でキャラクターを作成しますか？", embed=embed, view=final_view)
+        await interaction.response.edit_message(
+            content="以下の内容でキャラクターを作成しますか？", 
+            embed=embed, 
+            view=final_view
+        )
 
-    async def on_confirm(self, interaction: discord.Interaction):
+class FinalConfirmView(BaseOwnedView):
+    """キャラクター作成の最終確認を行うView"""
+    def __init__(self, author_id: int, bot: "MyBot", character_data: dict, parent_view: "CharacterCreationView"):
+        super().__init__(user_id=author_id, timeout=parent_view.timeout)
+        self.bot = bot
+        self.character_data = character_data
+        self.parent_view = parent_view
+
+    @ui.button(label="この内容で作成", style=discord.ButtonStyle.primary)
+    async def confirm_creation_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            # Use the already finalized character_data
-            character_obj = await self.bot.character_service.create_character(self.author.id, self.character_data)
-            await interaction.response.edit_message(content=f"キャラクター「{character_obj.name}」を作成しました！", view=None, embed=None)
+            character_obj = await self.bot.character_service.create_character(self.user_id, self.character_data)
+            await interaction.response.edit_message(
+                content=f"キャラクター「{character_obj.name}」を作成しました！", 
+                view=None, 
+                embed=None
+            )
+            self.parent_view.stop()
         except Exception as e:
             await interaction.response.edit_message(content=f"作成エラー: {e}", view=None, embed=None)
         self.stop()
@@ -310,15 +280,15 @@ class ProfileInputModal(ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         if self.appearance.value: self.view.character_data["appearance"] = self.appearance.value
         if self.background.value: self.view.character_data["background"] = self.background.value
-        await interaction.response.defer(); await self.view.prompt_stats_roll()
+        await interaction.response.defer()
+        await self.view.prompt_stats_decision()
 
 # --- Character Progression Views & Modals ---
 
-class CharacterSelectView(ui.View):
+class CharacterSelectView(BaseOwnedView):
     """保存されたキャラクターを選択するためのView"""
     def __init__(self, author_id: int, char_list: list[str], bot: "MyBot"):
-        super().__init__(timeout=180)
-        self.author_id = author_id
+        super().__init__(user_id=author_id, timeout=180)
         self.bot = bot
         
         options = [discord.SelectOption(label=name) for name in char_list]
@@ -326,25 +296,19 @@ class CharacterSelectView(ui.View):
         self.select_menu.callback = self.on_select
         self.add_item(self.select_menu)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message(messaging.MSG_ONLY_FOR_COMMAND_USER, ephemeral=True)
-            return False
-        return True
-
     async def on_select(self, interaction: discord.Interaction):
         char_name = interaction.data["values"][0]
         try:
-            character = await self.bot.character_service.get_character(self.author_id, char_name)
+            character = await self.bot.character_service.get_character(self.user_id, char_name)
             embed = create_character_embed(character)
             await interaction.response.edit_message(content=f"「{char_name}」のステータスです。", embed=embed, view=None)
         except Exception as e:
             await interaction.response.edit_message(content=f"エラー: `{e}`", view=None)
 
-class LevelUpView(ui.View):
+class LevelUpView(BaseOwnedView):
     """レベルアップ時の強化選択肢を提供するView"""
     def __init__(self, author: discord.User, character: Character, bot: "MyBot"):
-        super().__init__(timeout=300)
+        super().__init__(user_id=author.id, timeout=300)
         self.author = author
         self.character = character
         self.bot = bot
@@ -358,20 +322,16 @@ class LevelUpView(ui.View):
         self.skill_button.callback = self.on_skill_increase
         self.add_item(self.skill_button)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(messaging.MSG_ONLY_FOR_COMMAND_USER, ephemeral=True)
-            return False
-        return True
-
     async def on_stat_increase(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(StatIncreaseModal(self.character, self))
+        view = StatIncreaseView(self.character, self)
+        await interaction.response.send_message("強化する能力値を選択してください：", view=view, ephemeral=True)
 
     async def on_skill_increase(self, interaction: discord.Interaction):
         if not self.character.skills:
             await interaction.response.send_message("強化できる技能を習得していません。", ephemeral=True)
             return
-        await interaction.response.send_modal(SkillIncreaseModal(self.character, self))
+        view = SkillSelectView(self.character, self)
+        await interaction.response.send_message("強化する技能を選択してください：", view=view, ephemeral=True)
 
     async def update_view(self):
         self.stat_button.disabled = (self.character.stat_points <= 0)
@@ -380,44 +340,61 @@ class LevelUpView(ui.View):
         embed = create_character_embed(self.character)
         if self.message: await self.message.edit(embed=embed, view=self)
 
-class StatIncreaseModal(ui.Modal):
-    """能力値を強化するためのモーダル"""
+class StatIncreaseView(ui.View):
+    """能力値を強化するためのView（セレクトメニュー）"""
     def __init__(self, character: Character, parent_view: LevelUpView):
-        super().__init__(title="能力値強化")
+        super().__init__(timeout=60)
         self.character = character
         self.parent_view = parent_view
+        
         options = [discord.SelectOption(label=name, description=f"現在値: {val}") for name, val in character.stats.items()]
-        self.stat_select = ui.Select(placeholder="強化する能力値を選択...", options=options)
-        self.add_item(self.stat_select)
+        self.select = ui.Select(placeholder="強化する能力値を選択...", options=options)
+        self.select.callback = self.on_select
+        self.add_item(self.select)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        stat_to_increase = self.stat_select.values[0]
+    async def on_select(self, interaction: discord.Interaction):
+        stat_to_increase = self.select.values[0]
         if self.character.use_stat_point(stat_to_increase):
             await self.parent_view.bot.character_service.save_character(interaction.user.id, self.character)
-            await interaction.response.defer(); await self.parent_view.update_view()
+            await self.parent_view.update_view()
+            await interaction.response.edit_message(content=f"能力値 `{stat_to_increase}` を強化しました。", view=None)
         else:
             await interaction.response.send_message(f"エラー: 能力値 `{stat_to_increase}` の強化に失敗しました。", ephemeral=True)
 
-class SkillIncreaseModal(ui.Modal):
-    """技能を強化するためのモーダル"""
+class SkillSelectView(ui.View):
+    """技能強化のための技能選択View"""
     def __init__(self, character: Character, parent_view: LevelUpView):
-        super().__init__(title="技能強化")
+        super().__init__(timeout=60)
         self.character = character
         self.parent_view = parent_view
+        
         options = [discord.SelectOption(label=name, description=f"現在ランク: {rank}") for name, rank in character.skills.items()]
-        self.skill_select = ui.Select(placeholder="強化する技能を選択...", options=options)
-        self.add_item(self.skill_select)
+        self.select = ui.Select(placeholder="強化する技能を選択...", options=options)
+        self.select.callback = self.on_select
+        self.add_item(self.select)
+
+    async def on_select(self, interaction: discord.Interaction):
+        skill_name = self.select.values[0]
+        await interaction.response.send_modal(SkillPointsModal(self.character, self.parent_view, skill_name))
+
+class SkillPointsModal(ui.Modal):
+    """技能強化のためのポイント入力モーダル"""
+    def __init__(self, character: Character, parent_view: LevelUpView, skill_name: str):
+        super().__init__(title=f"技能強化: {skill_name}")
+        self.character = character
+        self.parent_view = parent_view
+        self.skill_name = skill_name
+        
         self.points = ui.TextInput(label="使用するポイント数", placeholder=f"最大 {character.skill_points} P", required=True)
         self.add_item(self.points)
 
     async def on_submit(self, interaction: discord.Interaction):
-        skill_to_increase = self.skill_select.values[0]
         try:
             points_to_use = int(self.points.value)
-            if self.character.use_skill_points(skill_to_increase, points_to_use):
+            if self.character.use_skill_points(self.skill_name, points_to_use):
                 await self.parent_view.bot.character_service.save_character(interaction.user.id, self.character)
                 await interaction.response.defer(); await self.parent_view.update_view()
             else:
-                await interaction.response.send_message(f"エラー: 技能 `{skill_to_increase}` の強化に失敗しました。", ephemeral=True)
+                await interaction.response.send_message(f"エラー: 技能 `{self.skill_name}` の強化に失敗しました。", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("エラー: ポイント数には数値を入力してください。", ephemeral=True)

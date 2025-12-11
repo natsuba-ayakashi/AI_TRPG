@@ -3,6 +3,9 @@ from discord import app_commands
 from discord.ext import commands
 from typing import TYPE_CHECKING, List
 
+from bot.ui.embeds import create_command_list_embed
+from core.errors import GameError
+
 if TYPE_CHECKING:
     from bot.client import MyBot
 
@@ -13,6 +16,55 @@ class UtilityCommandsCog(commands.Cog, name="ユーティリティ"):
     def __init__(self, bot: "MyBot"):
         self.bot = bot
 
+    # --- Setup Command Group ---
+    setup = app_commands.Group(name="setup", description="管理者向けの初期設定コマンド", default_permissions=discord.Permissions(administrator=True))
+
+    @setup.command(name="command_channel", description="このチャンネルにコマンド一覧を常時表示します。")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_command_channel(self, interaction: discord.Interaction):
+        """現在のチャンネルをコマンドリスト表示用チャンネルとして設定する。"""
+        await interaction.response.defer(ephemeral=True)
+        
+        # まずは古いメッセージを削除しようと試みる
+        try:
+            guild_settings = await self.bot.settings_repo.get_guild_settings(interaction.guild.id)
+            if guild_settings and guild_settings.get("command_message_id"):
+                old_channel_id = guild_settings.get("command_channel_id")
+                old_message_id = guild_settings.get("command_message_id")
+                if old_channel_id and old_message_id:
+                    channel = self.bot.get_channel(old_channel_id)
+                    if channel:
+                        message = await channel.fetch_message(old_message_id)
+                        await message.delete()
+        except (discord.NotFound, discord.Forbidden):
+            pass # 古いメッセージが見つからないか、削除権限がなくても気にしない
+
+        # 新しいコマンド一覧メッセージを投稿
+        embed = create_command_list_embed(self.bot)
+        msg = await interaction.channel.send(embed=embed)
+        
+        # 設定を保存
+        guild_settings = await self.bot.settings_repo.get_guild_settings(interaction.guild.id) or {}
+        guild_settings["command_channel_id"] = interaction.channel.id
+        guild_settings["command_message_id"] = msg.id
+        await self.bot.settings_repo.save_guild_settings(interaction.guild.id, guild_settings)
+        
+        await interaction.followup.send(f"✅ このチャンネル ({interaction.channel.mention}) をコマンド一覧の表示チャンネルとして設定しました。", ephemeral=True)
+
+    @setup.command(name="log_channel", description="このチャンネルにゲームの進行ログを出力します。")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_log_channel(self, interaction: discord.Interaction):
+        """現在のチャンネルをゲームログ出力用チャンネルとして設定する。"""
+        await interaction.response.defer(ephemeral=True)
+
+        guild_settings = await self.bot.settings_repo.get_guild_settings(interaction.guild.id) or {}
+        guild_settings["log_channel_id"] = interaction.channel.id
+        
+        await self.bot.settings_repo.save_guild_settings(interaction.guild.id, guild_settings)
+        
+        await interaction.followup.send(f"✅ このチャンネル ({interaction.channel.mention}) をゲームログの出力チャンネルとして設定しました。", ephemeral=True)
+
+
     @app_commands.command(name="ping", description="Botの応答速度を測定します。")
     async def ping(self, interaction: discord.Interaction):
         """Botのレイテンシを表示します。"""
@@ -22,24 +74,7 @@ class UtilityCommandsCog(commands.Cog, name="ユーティリティ"):
     @app_commands.command(name="help", description="利用可能なコマンドの一覧を表示します。")
     async def help(self, interaction: discord.Interaction):
         """Botに登録されている全てのスラッシュコマンドを一覧表示します。"""
-        embed = discord.Embed(
-            title="ヘルプ - コマンド一覧",
-            description="このBotで利用できるスラッシュコマンドの一覧です。",
-            color=discord.Color.green()
-        )
-
-        # Cogsごとにコマンドをグループ化
-        for cog_name, cog in self.bot.cogs.items():
-            # Cogに属するスラッシュコマンドのみを抽出
-            commands_in_cog = [
-                cmd for cmd in cog.get_app_commands() if isinstance(cmd, app_commands.Command)
-            ]
-            if not commands_in_cog:
-                continue
-
-            command_list = [f"`/{cmd.name}`: {cmd.description}" for cmd in commands_in_cog]
-            embed.add_field(name=cog_name, value="\n".join(command_list), inline=False)
-
+        embed = create_command_list_embed(self.bot)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="graveyard", description="この世界で散っていった者たちの記録を閲覧します。")

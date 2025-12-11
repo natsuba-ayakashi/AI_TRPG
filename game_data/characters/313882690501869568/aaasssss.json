@@ -1,0 +1,29 @@
+{
+    "char_id": "d6bd0923-ae06-478b-9389-4c9d25b396a7",
+    "user_id": 313882690501869568,
+    "name": "aaasssss",
+    "race": "エルフ",
+    "class": "戦士",
+    "appearance": "普通",
+    "background": "ドクズ",
+    "stats": {
+        "STR": 13,
+        "DEX": 14,
+        "CON": 17,
+        "INT": 8,
+        "WIS": 18,
+        "CHA": 14
+    },
+    "skills": {},
+    "level": 1,
+    "xp": 0,
+    "stat_points": 0,
+    "skill_points": 0,
+    "active_quests": [],
+    "completed_quests": [],
+    "inventory": [],
+    "hp": 44,
+    "max_hp": 44,
+    "mp": 26,
+    "max_mp": 26
+}

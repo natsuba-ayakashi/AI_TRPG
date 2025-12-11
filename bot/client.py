@@ -6,6 +6,8 @@ from pathlib import Path
 import asyncio
 
 from core.errors import GameError, FileOperationError, CharacterNotFoundError, AIConnectionError
+from infrastructure.repositories.settings_repository import SettingsRepository
+from bot.ui.embeds import create_command_list_embed
 
 # --- 型チェック用の前方参照 ---
 from typing import TYPE_CHECKING
@@ -13,6 +15,10 @@ if TYPE_CHECKING:
     from game.services.game_service import GameService
     from game.services.character_service import CharacterService
     from infrastructure.data_loaders.world_data_loader import WorldDataLoader
+    from bot.cogs.game_commands import GameCommandsCog
+
+# --- 定数 ---
+GUILD_SETTINGS_PATH = "game_data/guild_settings.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,6 +36,7 @@ class MyBot(commands.Bot):
         self.game_service: "GameService" = None
         self.character_service: "CharacterService" = None
         self.world_data_loader: "WorldDataLoader" = world_data_loader
+        self.settings_repo = SettingsRepository(GUILD_SETTINGS_PATH)
 
         # 設定値
         self.CHAR_SHEET_CHANNEL_ID = channel_ids.get("CHAR_SHEET_CHANNEL_ID", 0)
@@ -57,6 +64,48 @@ class MyBot(commands.Bot):
 
     async def on_ready(self):
         print(f'{self.user} としてDiscordにログインしました')
+        await self._update_command_lists()
+
+    async def _update_command_lists(self):
+        """起動時に、設定されている全てのコマンドリスト用メッセージを更新する"""
+        print("コマンドリストの自動更新を確認しています...")
+        for guild in self.guilds:
+            guild_settings = await self.settings_repo.get_guild_settings(guild.id)
+            if not guild_settings:
+                continue
+
+            channel_id = guild_settings.get("command_channel_id")
+            message_id = guild_settings.get("command_message_id")
+
+            if not channel_id or not message_id:
+                continue
+            
+            try:
+                channel = self.get_channel(channel_id)
+                if not channel or not isinstance(channel, discord.TextChannel):
+                    print(f"サーバー '{guild.name}' のチャンネル(ID:{channel_id})が見つかりません。")
+                    continue
+
+                message = await channel.fetch_message(message_id)
+                new_embed = create_command_list_embed(self)
+                await message.edit(embed=new_embed)
+                print(f"サーバー '{guild.name}' のコマンドリストを更新しました。")
+
+            except discord.NotFound:
+                print(f"サーバー '{guild.name}' で古いコマンドリストメッセージ(ID:{message_id})が見つかりませんでした。再投稿を試みます。")
+                try:
+                    # チャンネルは上で取得済みのはず
+                    if channel:
+                        new_embed = create_command_list_embed(self)
+                        new_msg = await channel.send(embed=new_embed)
+                        guild_settings["command_message_id"] = new_msg.id
+                        await self.settings_repo.save_guild_settings(guild.id, guild_settings)
+                        print(f"サーバー '{guild.name}' にコマンドリストを再投稿しました。")
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    print(f"サーバー '{guild.name}' でコマンドリストの再投稿に失敗しました: {e}")
+            except (discord.Forbidden, discord.HTTPException) as e:
+                print(f"サーバー '{guild.name}' のコマンドリスト更新に失敗しました: {e}")
+
 
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         """ボイスチャンネルのメンバーがBotのみになったら自動退出する"""
@@ -82,19 +131,19 @@ class MyBot(commands.Bot):
             return
         if not message.guild or isinstance(message.channel, discord.DMChannel):
             return
-        if message.content.startswith(self.command_prefix):
-            # コマンドとして処理されるべきメッセージは無視
-            # process_commandsを呼ぶと二重処理になる可能性があるため、プレフィックスで判定
-            return
-            
-        # game_serviceが初期化されるまで待つ
-        if not self.game_service:
-            return
-            
+
+        # まずコマンドを処理させ、コマンドでない場合にのみゲーム進行処理を行う
+        ctx = await self.get_context(message)
+        if ctx.valid:
+             await self.process_commands(message)
+             return
+
         # 対応するゲームセッションをスレッドIDから取得
         session = self.game_service.sessions.get_session_by_thread_id(message.channel.id)
         if not session:
-            return # ゲームが行われていないスレッドでの発言は無視
+            # ゲーム中でないスレッドでの発言は何もしない
+            await self.process_commands(message) # 通常のコマンドとして処理を試みる
+            return
 
         # --- ゲーム進行処理 ---
         # プレイヤーの行動であるとみなし、ゲームを進行させる
@@ -109,20 +158,24 @@ class MyBot(commands.Bot):
                     return
 
                 # 処理中であることをユーザーに示す
+                user_input = message.clean_content
                 async with message.channel.typing():
                     response_data = await self.game_service.proceed_game(
                         user_id=session.user_id,
-                        user_input=message.clean_content
+                        user_input=user_input
                     )
                 
                 # Cogのヘルパーメソッドを呼び出して応答を処理
-                await game_cog._handle_response(message.channel, response_data, session.user_id)
+                await game_cog._handle_response(message.channel, response_data, session.user_id, user_input)
 
             except GameError as e:
                 await message.channel.send(f"ゲームエラー: {e}")
             except Exception as e:
                 logging.exception(f"on_messageでの予期せぬエラー (Channel: {message.channel.id})")
                 await message.channel.send("予期せぬエラーが発生しました。")
+        
+        # 念のため、最後にコマンド処理を試みる
+        await self.process_commands(message)
 
     async def on_error(self, event_method: str, *args, **kwargs):
         """グローバルエラーハンドラ"""

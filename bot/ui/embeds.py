@@ -1,13 +1,25 @@
 import discord
-from typing import TYPE_CHECKING
+from discord import app_commands
+from discord.ext import commands
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from game.models.character import Character
+    from bot.client import MyBot
 
 
 def create_character_embed(character: "Character") -> discord.Embed:
     """キャラクターオブジェクトからステータス表示用のEmbedを生成する"""
     
+    STAT_DESCRIPTIONS = {
+        "STR": "筋力",
+        "DEX": "器用さ",
+        "CON": "耐久力",
+        "INT": "知力",
+        "WIS": "判断力",
+        "CHA": "魅力"
+    }
+
     embed = discord.Embed(
         title=f"{character.name} - Lv. {character.level}",
         description=f"{character.race} / {character.class_}",
@@ -23,7 +35,7 @@ def create_character_embed(character: "Character") -> discord.Embed:
     embed.add_field(name="リソース", value=hp_mp_text, inline=False)
 
     # 能力値
-    stats_text = " / ".join([f"**{name}**: {val}" for name, val in character.stats.items()])
+    stats_text = " / ".join([f"**{name} ({STAT_DESCRIPTIONS.get(name, '?')})**: {val}" for name, val in character.stats.items()])
     embed.add_field(name="能力値", value=stats_text, inline=False)
 
     # 技能
@@ -41,6 +53,31 @@ def create_character_embed(character: "Character") -> discord.Embed:
 
     embed.set_footer(text=f"キャラクターID: {character.char_id}")
 
+    return embed
+
+def create_command_list_embed(bot: "MyBot") -> discord.Embed:
+    """Botに登録されているすべてのスラッシュコマンドのEmbedを生成する。"""
+    embed = discord.Embed(
+        title="コマンド一覧",
+        description="このBotで利用できるスラッシュコマンドの一覧です。",
+        color=discord.Color.green()
+    )
+
+    # Cogsごとにコマンドをグループ化
+    cogs_to_display = {name: cog for name, cog in bot.cogs.items() if name not in ["ゲーム管理"]} # "ゲーム管理" Cogを除外
+    
+    for cog_name, cog in cogs_to_display.items():
+        # Cogに属するスラッシュコマンドのみを抽出
+        commands_in_cog = [
+            cmd for cmd in cog.get_app_commands() if isinstance(cmd, app_commands.Command)
+        ]
+        if not commands_in_cog:
+            continue
+
+        command_list = [f"`/{cmd.name}`: {cmd.description}" for cmd in commands_in_cog]
+        embed.add_field(name=cog_name, value="\n".join(command_list), inline=False)
+    
+    embed.set_footer(text="このメッセージはBot起動時に自動更新されます。")
     return embed
 
 
@@ -72,7 +109,7 @@ def create_journal_embed(character: "Character", all_quests_data: dict) -> disco
 
     return embed
 
-def create_action_result_embed(action_result: dict) -> discord.Embed:
+def create_action_result_embed(action_result: dict) -> Optional[discord.Embed]:
     """AIの応答に含まれるaction_resultからEmbedを生成する"""
     
     details = action_result.get("details", {})
@@ -95,3 +132,27 @@ def create_action_result_embed(action_result: dict) -> discord.Embed:
         return embed
 
     return None # 未知のタイプの場合は何も返さない
+
+def create_log_embed(user: discord.User, user_input: str, narrative: str, action_result: Optional[dict]) -> discord.Embed:
+    """ゲームの進行状況を記録するためのログ用Embedを生成する"""
+    embed = discord.Embed(
+        title="ゲームログ",
+        description=narrative,
+        color=discord.Color.dark_grey(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=user.display_name, icon_url=user.avatar.url if user.avatar else None)
+    embed.add_field(name="プレイヤーの行動", value=f"```{user_input}```", inline=False)
+    
+    if action_result and action_result.get("type") == "DICE_ROLL":
+        details = action_result.get("details", {})
+        skill = details.get("skill", "不明")
+        target = details.get("target", "?")
+        roll = details.get("roll", "?")
+        success = details.get("success", False)
+        result_text = "成功" if success else "失敗"
+        
+        dice_summary = f"技能: {skill} | 目標値: {target} | 出目: {roll} | 結果: **{result_text}**"
+        embed.add_field(name="🎲 ダイスロール結果", value=dice_summary, inline=False)
+
+    return embed

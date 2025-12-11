@@ -21,17 +21,42 @@
     "classes": [
       {
         "name": "戦士",
-        "description": "剣や斧を扱い、前線で戦う屈強なクラス。"
+        "description": "剣や斧を扱い、前線で戦う屈強なクラス。",
+        "skills": [
+          { "level": 2, "name": "強撃", "description": "次の物理攻撃のダメージを増加させる。", "type": "active" },
+          { "level": 3, "name": "挑発", "description": "敵の注意を自分に引きつけ、仲間を守る。", "type": "active" },
+          { "level": 4, "name": "シールドバッシュ", "description": "盾で敵を強打し、一定確率で気絶させる。", "type": "active", "effect": "stun" }
+        ]
       },
       {
         "name": "魔術師",
-        "description": "強力な魔法を操り、遠距離から敵を攻撃するクラス。"
+        "description": "強力な魔法を操り、遠距離から敵を攻撃するクラス。",
+        "skills": [
+          { "level": 2, "name": "ファイアボール", "description": "火の玉を放ち、敵単体にダメージを与える。", "type": "active", "cost": { "mp": 5 } },
+          { "level": 3, "name": "ヒール", "description": "味方単体のHPを回復する。", "type": "active", "cost": { "mp": 8 } },
+          { "level": 4, "name": "ライトニングボルト", "description": "強力な稲妻を放ち、敵単体に大ダメージを与える。", "type": "active", "cost": { "mp": 12 } },
+          { "level": 5, "name": "マジックシールド", "description": "魔法の盾で身を守り、次のターンに受けるダメージを軽減する。", "type": "defensive", "cost": { "mp": 10 } }
+        ]
       },
       {
         "name": "盗賊",
-        "description": "素早い動きで敵を翻弄し、罠の解除や鍵開けも得意なクラス。"
+        "description": "素早い動きで敵を翻弄し、罠の解除や鍵開けも得意なクラス。",
+        "skills": [
+          { "level": 2, "name": "隠れる", "description": "敵の視界から隠れ、次の攻撃を有利にする。", "type": "active" },
+          { "level": 3, "name": "毒の一撃", "description": "武器に毒を塗り、追加の継続ダメージを与える攻撃を行う。", "type": "active" },
+          { "level": 4, "name": "二刀流", "description": "二本の武器を巧みに操り、通常攻撃時に追加の攻撃を行うことがある。", "type": "passive" },
+          { "level": 5, "name": "罠設置", "description": "地面に罠を設置し、敵が踏むとダメージと移動阻害効果を与える。", "type": "active" }
+        ]
       }
     ]
+  },
+  "stat_definitions": {
+    "STR": "筋力 (Strength): 物理的な力、攻撃の威力に関わります。",
+    "DEX": "敏捷性 (Dexterity): 素早さ、回避能力、手先の器用さに関わります。",
+    "CON": "耐久力 (Constitution): 体力、打たれ強さ、病気への抵抗力に関わります。",
+    "INT": "知性 (Intelligence): 知識、記憶力、魔法の理解度に関わります。",
+    "WIS": "判断力 (Wisdom): 直感、洞察力、感覚の鋭さに関わります。",
+    "CHA": "魅力 (Charisma): 交渉力、リーダーシップ、人々を惹きつける力に関わります。"
   },
   "items": {
     "ポーション": {
@@ -39,6 +64,18 @@
     },
     "錆びた短剣": {
       "description": "ありふれた古い短剣。"
+    },
+    "竜の宝玉": {
+      "description": "竜王が遺したと言われる伝説の宝玉。計り知れない価値がある。"
+    },
+    "不死王の冠": {
+      "description": "リッチキングが身に着けていた邪悪な冠。強大な魔力を秘めている。"
+    },
+    "竜の頂への地図の断片": {
+      "description": "竜の頂への道が記されているとされる地図の断片。古代の文字で書かれており、このままでは読めない。"
+    },
+    "太陽の石": {
+      "description": "太陽の力を宿した聖なる石。邪悪な魔力を打ち破る力がある。"
     }
   },
   "enemies": {
@@ -50,21 +87,145 @@
         "STR": 12,
         "DEX": 14
       },
+      "skills": [
+        { "name": "雄叫び", "description": "自身の攻撃力を一時的に上昇させる。次の攻撃のダメージが増える。", "type": "buff" }
+      ],
       "rewards": {
         "xp": 10,
         "items": ["錆びた短剣"]
+      }
+    },
+    "dragon_lord": {
+      "id": "dragon_lord",
+      "name": "竜王",
+      "hp": 200,
+      "stats": {
+        "STR": 20,
+        "CON": 18
+      },
+      "skills": [
+        { "name": "ヘルファイアブレス", "description": "灼熱の炎を吐き、プレイヤーに甚大なダメージを与える。", "type": "attack", "damage_type": "fire" },
+        { "name": "恐怖の咆哮", "description": "天を揺るがす咆哮で、プレイヤーを恐怖状態にする（行動にペナルティ）。", "type": "debuff", "effect": "fear" }
+      ],
+      "rewards": {
+        "xp": 500,
+        "items": ["竜の宝玉"]
+      }
+    },
+    "lich_king": {
+      "id": "lich_king",
+      "name": "リッチキング",
+      "hp": 180,
+      "stats": {
+        "INT": 22,
+        "WIS": 18
+      },
+      "skills": [
+        { "name": "魂の吸収", "description": "プレイヤーの生命力を吸い取り、自身のHPを回復する。", "type": "attack", "damage_type": "necrotic" },
+        { "name": "アンデッド召喚", "description": "骸骨の戦士を複数体召喚し、プレイヤーを囲む。", "type": "summon" }
+      ],
+      "rewards": {
+        "xp": 550,
+        "items": ["不死王の冠"]
+      }
+    },
+    "skeleton_knight": {
+      "id": "skeleton_knight",
+      "name": "骸骨騎士",
+      "hp": 40,
+      "stats": {
+        "STR": 15,
+        "DEX": 10
+      },
+      "skills": [],
+      "rewards": {
+        "xp": 25,
+        "items": []
+      }
+    },
+    "ancient_guardian": {
+      "id": "ancient_guardian",
+      "name": "古代の守護者",
+      "hp": 60,
+      "stats": {
+        "STR": 18,
+        "CON": 16
+      },
+      "skills": [
+        { "name": "岩石投げ", "description": "巨大な岩を投げつけ、プレイヤーにダメージを与える。", "type": "attack" }
+      ],
+      "rewards": {
+        "xp": 40,
+        "items": [
+          "竜の頂への地図の断片"
+        ]
       }
     }
   },
   "npcs": {
     "npc_gardener": {
-      "name": "庭師の老人"
+      "name": "庭師の老人",
+      "disposition": "neutral",
+      "personality": "無口だが、植物のことになると饒舌になる。困っている人を見ると放っておけない優しい性格。",
+      "dialogue_topics": ["庭の花について", "村の最近の出来事", "ゴブリンの噂"]
+    },
+    "npc_historian": {
+      "name": "歴史家エリアーナ",
+      "disposition": "neutral",
+      "personality": "知識欲が旺盛で、古代の遺物や文献に目がない。少し変わり者だが、頼れば力を貸してくれる。",
+      "dialogue_topics": ["古代文明について", "竜の伝説", "アンデッドの歴史"]
     }
   },
   "quests": {
-    "main_quest_01": {
-        "title": "最初の試練",
-        "description": "村の周辺にいるゴブリンを討伐する。"
+    "main_quest": {
+        "title": "迫りくる脅威",
+        "description": "この地に迫る大いなる脅威の正体を突き止め、それを打ち払う。"
+    },
+    "dragon_quest_1": {
+      "title": "失われた地図を探せ",
+      "description": "竜の頂への道が記されているという地図の断片が、とある遺跡に眠っているらしい。遺跡の『古代の守護者』を倒し、地図を手に入れる。",
+      "status": "inactive"
+    },
+    "dragon_quest_2": {
+      "title": "古代文字の解読",
+      "description": "手に入れた地図は古代文字で書かれている。歴史家のエリアーナに解読を依頼する。",
+      "status": "inactive",
+      "unlocks_location": "dragon_peak"
+    },
+    "lich_quest_1": {
+      "title": "死者の目覚め",
+      "description": "村の近くにある古い聖堂から、夜な夜なアンデッドが現れるという。聖堂の地下墓地を調査し、元凶である『骸骨騎士』を討伐する。",
+      "status": "inactive"
+    },
+    "lich_quest_2": {
+      "title": "太陽の石を求めて",
+      "description": "骸骨騎士の日記から、リッチキングの存在と、彼の結界を破る『太陽の石』のことがわかった。エルフの森の奥深くにあるという太陽の石を探し出す。",
+      "status": "inactive",
+      "unlocks_location": "lich_tomb"
+    }
+  },
+  "quest_chains": {
+    "dragon_lord": ["dragon_quest_1", "dragon_quest_2"],
+    "lich_king": ["lich_quest_1", "lich_quest_2"]
+  },
+  "final_bosses": [
+    "dragon_lord", "lich_king"
+  ],
+  "locations": {
+    "village": {
+      "name": "始まりの村",
+      "description": "冒険の拠点となる小さな村。",
+      "is_accessible": true
+    },
+    "dragon_peak": {
+      "name": "竜の頂",
+      "description": "灼熱の溶岩が流れ、邪悪な竜王が住まうという伝説の山。",
+      "is_accessible": false
+    },
+    "lich_tomb": {
+      "name": "リッチの墓所",
+      "description": "アンデッドがうろつく、忘れ去られた王の墓。",
+      "is_accessible": false
     }
   },
   "timed_events": {

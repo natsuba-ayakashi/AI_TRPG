@@ -1,0 +1,34 @@
+{
+    "char_id": "02df5b1c-777d-4287-aafd-5c6feaa9b3d9",
+    "user_id": 313882690501869568,
+    "name": "かかしぃ！！！！",
+    "race": "人間",
+    "class": "盗賊",
+    "appearance": "顎から鼻を覆うようなマスクを着けている、片目が写〇眼のあいつ",
+    "background": "とくにない",
+    "stats": {
+        "STR": 9,
+        "DEX": 13,
+        "CON": 13,
+        "INT": 9,
+        "WIS": 12,
+        "CHA": 15
+    },
+    "skills": {},
+    "level": 1,
+    "xp": 20,
+    "stat_points": 0,
+    "skill_points": 0,
+    "active_quests": [
+        "main_quest_03"
+    ],
+    "completed_quests": [],
+    "inventory": [
+        "小型の宝箱",
+        "精霊の小道具"
+    ],
+    "hp": 36,
+    "max_hp": 36,
+    "mp": 28,
+    "max_mp": 28
+}
