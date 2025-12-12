@@ -8,7 +8,7 @@ from core.errors import CharacterNotFoundError
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from infrastructure.repositories.file_repository import FileRepository
+    from game.repositories.file_repository import FileRepository
 
 class CharacterService:
     """

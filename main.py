@@ -17,10 +17,10 @@ from config.settings import (
     WORLDS_DATA_PATH, SYSTEM_PROMPTS_FILE_PATH, CHARACTERS_DATA_PATH, WORLD_STATE_FILE_PATH,
 )
 from game.managers.session_manager import SessionManager
-from infrastructure.data_loaders.world_data_loader import WorldDataLoader
-from infrastructure.data_loaders.prompt_loader import PromptLoader
-from infrastructure.repositories.file_repository import FileRepository
-from infrastructure.repositories.world_repository import WorldRepository
+from game.loaders.world_data_loader import WorldDataLoader
+from game.loaders.prompt_loader import PromptLoader
+from game.repositories.file_repository import FileRepository
+from game.repositories.world_repository import WorldRepository
 from core.event_bus import EventBus
 from game.services.game_service import GameService
 from game.services.character_service import CharacterService

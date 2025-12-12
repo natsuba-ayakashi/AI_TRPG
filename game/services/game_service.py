@@ -14,8 +14,8 @@ if TYPE_CHECKING:
     from game.managers.session_manager import SessionManager
     from game.services.character_service import CharacterService
     from game.services.ai_service import AIService
-    from infrastructure.data_loaders.world_data_loader import WorldDataLoader
-    from infrastructure.repositories.world_repository import WorldRepository
+    from game.loaders.world_data_loader import WorldDataLoader
+    from game.repositories.world_repository import WorldRepository
 
 logger = logging.getLogger(__name__)
 

@@ -4,8 +4,9 @@ from discord import app_commands
 from typing import TYPE_CHECKING, Optional
 from collections import Counter
 from game.models.character import Character
-from bot.ui.embeds import create_character_embed, create_journal_embed
+from bot.ui.embeds import create_character_embed
 from bot.ui.views.character_creation import CharacterCreationView
+from bot.ui.views.utility import ConfirmDeleteView
 from bot.ui.views.character_progression import CharacterSelectView, LevelUpView
 from bot import messaging
 
@@ -124,21 +125,28 @@ class CharacterCommandsCog(commands.Cog, name="キャラクター管理"):
                 message += f"\n\n**レベルアップ！** レベルが {session.character.level} になりました！{new_skills_msg}\n`/levelup` コマンドでキャラクターを強化してください。"
             await interaction.response.send_message(message, ephemeral=True)
 
-    # --- ジャーナル確認 ---
-    @app_commands.command(name="journal", description="冒険日誌（クエスト一覧）を表示します。")
-    async def journal(self, interaction: discord.Interaction):
-        """現在受注しているクエストや完了したクエストの一覧を表示する"""
-        session = self.bot.game_service.sessions.get_session(interaction.user.id)
-        if not session:
-            await interaction.response.send_message(messaging.MSG_SESSION_REQUIRED, ephemeral=True)
+    # --- キャラクター削除 ---
+    @app_commands.command(name="delete_character", description="作成済みのキャラクターを削除します。")
+    @app_commands.describe(character_name="削除するキャラクターの名前")
+    async def delete_character(self, interaction: discord.Interaction, character_name: str):
+        active_session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if active_session and active_session.character.name == character_name:
+            await interaction.response.send_message(messaging.character_in_use(character_name), ephemeral=True)
             return
+        view = ConfirmDeleteView(interaction.user.id, self.bot, character_name)
+        await interaction.response.send_message(messaging.character_delete_confirmation(character_name), view=view, ephemeral=True)
 
-        world_data = self.bot.world_data_loader.get_world(session.world_name)
-        all_quests_data = world_data.get('quests', {})
-        all_enemies_data = world_data.get('enemies', {})
-        embed = create_journal_embed(session, all_quests_data, all_enemies_data)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+async def _character_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """キャラクター名をオートコンプリートするための共通メソッド"""
+    bot: "MyBot" = interaction.client
+    # character_serviceへのアクセスにはbotインスタンスが必要
+    # interaction.client は Bot インスタンス
+    char_names = await bot.character_service.get_all_character_names(interaction.user.id)
+    return [app_commands.Choice(name=name, value=name) for name in char_names if current.lower() in name.lower()][:25]
 
 
 async def setup(bot: "MyBot"):
-    await bot.add_cog(CharacterCommandsCog(bot))
+    cog = CharacterCommandsCog(bot)
+    cog.delete_character.autocomplete('character_name')(_character_autocomplete)
+    await bot.add_cog(cog)

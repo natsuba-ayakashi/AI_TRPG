@@ -7,7 +7,7 @@ import os
 import asyncio
 
 from core.errors import GameError, FileOperationError, CharacterNotFoundError, AIConnectionError
-from infrastructure.repositories.settings_repository import SettingsRepository
+from game.repositories.settings_repository import SettingsRepository
 from bot.ui.embeds import create_command_list_embed
 from bot import messaging
 from config.settings import GUILD_SETTINGS_FILE_PATH
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from game.services.game_service import GameService
     from game.services.character_service import CharacterService
-    from infrastructure.data_loaders.world_data_loader import WorldDataLoader
+    from game.loaders.world_data_loader import WorldDataLoader
     from core.event_bus import EventBus
     from game.models.session import GameSession
     from bot.cogs.game_commands import GameCommandsCog
@@ -72,6 +72,11 @@ class MyBot(commands.Bot):
         if dev_guild_id and dev_guild_id.isdigit():
             guild = discord.Object(id=int(dev_guild_id))
             self.tree.copy_global_to(guild=guild)
+            
+            # 開発環境での重複を防ぐため、グローバルコマンドをクリアする（オプション）
+            # 注意: これにより、他のサーバーでこのBotを使用している場合、コマンドが消えます。
+            # self.tree.clear_commands(guild=None) 
+
             try:
                 await self.tree.sync(guild=guild)
                 print(f"スラッシュコマンドをサーバー(ID: {dev_guild_id})に同期しました。")

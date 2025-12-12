@@ -19,8 +19,8 @@ from game.prompts.builder import (
 
 if TYPE_CHECKING:
     from game.models.session import GameSession
-    from infrastructure.data_loaders.world_data_loader import WorldDataLoader
-    from infrastructure.data_loaders.prompt_loader import PromptLoader
+    from game.loaders.world_data_loader import WorldDataLoader
+    from game.loaders.prompt_loader import PromptLoader
 
 logger = logging.getLogger(__name__)
 

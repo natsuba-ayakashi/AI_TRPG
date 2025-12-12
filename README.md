@@ -49,17 +49,21 @@ Discord上でAIゲームマスターと共に遊ぶ、テキストベースのTR
 AI_TRPG_Fantasy/
 ├── bot/              # Discordボット関連
 │   ├── cogs/         # スラッシュコマンドを機能ごとに分割
-│   └── ui/           # EmbedやViewなどのUIコンポーネント
+│   ├── ui/           # Embedなどの表示コンポーネント
+│   └── views/        # ボタンやモーダルなどのインタラクティブコンポーネント
 ├── game/             # ゲームのコアロジック（Discordに非依存）
 │   ├── models/       # Character, Enemy, Sessionなどのデータ構造
 │   ├── services/     # ゲームのビジネスロジック
-│   └── managers/     # 複数のオブジェクトを管理
+│   ├── managers/     # 複数のオブジェクトを管理
+│   └── prompts/      # AI生成用のプロンプト定義
 ├── infrastructure/   # データ保存や外部APIなど技術的な詳細
 │   ├── data_loaders/ # 静的データ（世界設定など）の読み込み
 │   └── repositories/ # 動的データ（キャラクター、世界状態）の永続化
 ├── core/             # プロジェクト共通の要素（カスタム例外など）
 ├── config/           # 設定ファイル
 ├── game_data/        # ゲームの静的データ（JSONファイル）
+│   └── worlds/       # 世界設定データ
+├── logs/             # ログファイル
 └── main.py           # アプリケーションのエントリーポイント
 ```
 

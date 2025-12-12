@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from game.models.session import GameSession
-    from infrastructure.data_loaders.prompt_loader import PromptLoader
+    from game.loaders.prompt_loader import PromptLoader
 
 # --- Base Component ---
 class PromptComponent(ABC):

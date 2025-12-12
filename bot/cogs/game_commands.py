@@ -6,7 +6,6 @@ import logging
 import random
 
 from core.errors import GameError, CharacterNotFoundError
-from bot.ui.views.utility import ConfirmDeleteView
 from bot.ui.views.combat import CombatView
 from bot.ui.views.character_progression import LevelUpView
 from bot.ui.views.shop import ShopView
@@ -126,15 +125,17 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
             pass
 
         # 応答の送信
+        # discord.pyの仕様上、view=Noneを渡すとエラーになる場合があるため、Noneの場合はMISSINGを使用する
+        view_arg = view_to_send if view_to_send is not None else discord.utils.MISSING
         message = None
         if isinstance(source, discord.Interaction):
             if source.response.is_done():
-                 message = await source.followup.send(narrative, embeds=embeds_to_send, view=view_to_send, wait=True)
+                 message = await source.followup.send(narrative, embeds=embeds_to_send, view=view_arg, wait=True)
             else:
-                 await source.response.send_message(narrative, embeds=embeds_to_send, view=view_to_send)
+                 await source.response.send_message(narrative, embeds=embeds_to_send, view=view_arg)
                  message = await source.original_response()
         else: # discord.TextChannel
-            message = await source.send(narrative, embeds=embeds_to_send, view=view_to_send)
+            message = await source.send(narrative, embeds=embeds_to_send, view=view_arg)
         
         if view_to_send and hasattr(view_to_send, 'message'):
             view_to_send.message = message
@@ -346,18 +347,6 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
             except Exception:
                 logging.exception("ゲーム終了中に予期せぬエラーが発生しました。")
                 await interaction.followup.send("ゲームの終了中に予期せぬエラーが発生しました。", ephemeral=True)
-
-    # --- /delete_character コマンド ---
-    # (変更なし)
-    @app_commands.command(name="delete_character", description="作成済みのキャラクターを削除します。")
-    @app_commands.describe(character_name="削除するキャラクターの名前")
-    async def delete_character(self, interaction: discord.Interaction, character_name: str):
-        active_session = self.bot.game_service.sessions.get_session(interaction.user.id)
-        if active_session and active_session.character.name == character_name:
-            await interaction.response.send_message(messaging.character_in_use(character_name), ephemeral=True)
-            return
-        view = ConfirmDeleteView(interaction.user.id, self.bot, character_name)
-        await interaction.response.send_message(messaging.character_delete_confirmation(character_name), view=view, ephemeral=True)
 
     # --- /next コマンド ---
 
@@ -716,5 +705,4 @@ async def _character_autocomplete(interaction: discord.Interaction, current: str
 async def setup(bot: "MyBot"):
     cog = GameCommandsCog(bot)
     cog.start_game.autocomplete('character_name')(_character_autocomplete)
-    cog.delete_character.autocomplete('character_name')(_character_autocomplete)
     await bot.add_cog(cog)
