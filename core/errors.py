@@ -17,3 +17,7 @@ class CharacterNotFoundError(FileOperationError):
 class AIConnectionError(GameError):
     """AI生成APIへの接続または応答受信に関連するエラー。"""
     pass
+
+class SessionNotFoundError(GameError):
+    """指定されたセッションが見つからない場合に発生するエラー。"""
+    pass

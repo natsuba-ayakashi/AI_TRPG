@@ -183,6 +183,9 @@
       "description": "鎖を編んで作られた鎧。",
       "equipment_type": "armor",
       "stats_bonus": { "CON": 3 }
+    },
+    "古びた鍵": {
+      "description": "錆びついているが、どこかの扉を開けられそうな鍵。"
     }
   },
   "shops": {
@@ -341,7 +344,10 @@
       "name": "庭師の老人",
       "disposition": "neutral",
       "personality": "無口だが、植物のことになると饒舌になる。困っている人を見ると放っておけない優しい性格。",
-      "dialogue_topics": ["庭の花について", "村の最近の出来事", "ゴブリンの噂"]
+      "dialogue_topics": ["庭の花について", "村の最近の出来事", "ゴブリンの噂"],
+      "quest_triggers": {
+        "friendly": "gardener_quest"
+      }
     },
     "npc_historian": {
       "name": "歴史家エリアーナ",
@@ -354,6 +360,11 @@
     "main_quest": {
         "title": "迫りくる脅威",
         "description": "この地に迫る大いなる脅威の正体を突き止め、それを打ち払う。"
+    },
+    "gardener_quest": {
+      "title": "幻の花",
+      "description": "庭師の老人が、かつて見たという幻の花を探している。森の奥深くにあるらしい。",
+      "status": "inactive"
     },
     "dragon_quest_1": {
       "title": "失われた地図を探せ",
@@ -410,22 +421,51 @@
     "ancient_ruins_entrance": {
       "name": "古代遺跡の入り口",
       "description": "苔むした石で作られた、巨大な扉がある。",
-      "is_accessible": true
+      "is_accessible": true,
+      "on_enter": {
+        "event_id": "ruins_entry_trap",
+        "once": true,
+        "type": "trap",
+        "damage": 5,
+        "narrative": "遺跡に足を踏み入れた瞬間、仕掛けられた矢が飛んできた！"
+      }
     },
     "ancient_ruins_hall": {
       "name": "古代遺跡の広間",
       "description": "かつての栄華を思わせる、だだっ広い空間。中央には何かの台座がある。",
-      "is_accessible": true
+      "is_accessible": true,
+      "on_enter": {
+        "event_id": "ruins_hall_encounter",
+        "once": true,
+        "type": "encounter",
+        "enemies": ["skeleton_knight", "skeleton_knight"],
+        "narrative": "広間の影から、骸骨の騎士たちが姿を現した！"
+      }
     },
     "dragon_peak": {
       "name": "竜の頂",
       "description": "灼熱の溶岩が流れ、邪悪な竜王が住まうという伝説の山。",
-      "is_accessible": false
+      "requirements": {
+        "quest": { "id": "dragon_quest_2", "status": "completed" }
+      },
+      "is_accessible": true
     },
     "lich_tomb": {
       "name": "リッチの墓所",
       "description": "アンデッドがうろつく、忘れ去られた王の墓。",
-      "is_accessible": false
+      "requirements": {
+        "quest": { "id": "lich_quest_2", "status": "completed" }
+      },
+      "is_accessible": true
+    },
+    "secret_treasure_room": {
+      "name": "秘密の宝物庫",
+      "description": "厳重な扉で閉ざされた部屋。中には財宝が眠っている。",
+      "requirements": {
+        "item": "古びた鍵",
+        "consume": true
+      },
+      "is_accessible": true
     }
   },
   "timed_events": {

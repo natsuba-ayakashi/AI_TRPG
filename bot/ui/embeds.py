@@ -1,10 +1,10 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from game.models.character import Character
+    from game.models.session import GameSession
     from bot.client import MyBot
 
 
@@ -152,9 +152,9 @@ def create_action_result_embed(action_result: dict) -> Optional[discord.Embed]:
     """AIの応答に含まれるaction_resultからEmbedを生成する"""
     
     details = action_result.get("details", {})
-    type = action_result.get("type")
+    result_type = action_result.get("type")
 
-    if type == "DICE_ROLL":
+    if result_type == "DICE_ROLL":
         skill = details.get("skill", "不明な技能")
         target = details.get("target", "?")
         roll = details.get("roll", "?")
@@ -180,7 +180,7 @@ def create_log_embed(user: discord.User, user_input: str, narrative: str, action
         color=discord.Color.dark_grey(),
         timestamp=discord.utils.utcnow()
     )
-    embed.set_author(name=user.display_name, icon_url=user.avatar.url if user.avatar else None)
+    embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
     embed.add_field(name="プレイヤーの行動", value=f"```{user_input}```", inline=False)
     
     if action_result and action_result.get("type") == "DICE_ROLL":

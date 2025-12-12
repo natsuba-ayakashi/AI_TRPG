@@ -6,10 +6,11 @@ import logging
 import random
 
 from core.errors import GameError, CharacterNotFoundError
-from bot.ui.views.utility import ConfirmDeleteView, ActionSuggestionView
+from bot.ui.views.utility import ConfirmDeleteView
 from bot.ui.views.combat import CombatView
+from bot.ui.views.character_progression import LevelUpView
 from bot.ui.views.shop import ShopView
-from bot.ui.embeds import create_action_result_embed
+from bot.ui.embeds import create_action_result_embed, create_character_embed, create_journal_embed
 from bot.ui.pagination import LogPaginatorView
 from bot import messaging
 
@@ -17,6 +18,27 @@ if TYPE_CHECKING:
     from bot.client import MyBot
     from game.models.session import GameSession
 
+class GameActionButton(discord.ui.Button):
+    """ゲームのアクションを実行するボタン。全文を保持し、ラベルは短縮表示する。"""
+    def __init__(self, label: str, full_action: str, callback_func):
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
+        self.full_action = full_action
+        self.callback_func = callback_func
+
+    async def callback(self, interaction: discord.Interaction):
+        # ボタンが押されたら、登録されたコールバック関数に全文を渡して実行
+        await self.callback_func(interaction, self.full_action)
+
+class GameActionView(discord.ui.View):
+    """アクション提案を表示するView。文字数制限対策を内包。"""
+    def __init__(self, actions: List[str], callback_func, timeout: float = None):
+        super().__init__(timeout=timeout)
+        for action in actions:
+            # ラベルの短縮処理 (80文字制限対策)
+            label = action
+            if len(label) > 80:
+                label = label[:77] + "..."
+            self.add_item(GameActionButton(label, action, callback_func))
 
 class GameCommandsCog(commands.Cog, name="ゲーム管理"):
     """ゲームの開始や終了、キャラクターの削除などを管理するコマンド"""
@@ -97,7 +119,8 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
         if not session or not session.in_combat:
             if suggested_actions := response_data.get("suggested_actions"):
                 if suggested_actions:
-                    view_to_send = ActionSuggestionView(suggested_actions, self.bot)
+                    # GameActionViewを使用し、コールバックとして進行メソッドを渡す
+                    view_to_send = GameActionView(suggested_actions, self._proceed_and_respond_from_interaction)
         else:
             # 戦闘中の場合、ここで敵のターン処理などを挟むことも可能
             pass
@@ -115,6 +138,25 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
         
         if view_to_send and hasattr(view_to_send, 'message'):
             view_to_send.message = message
+
+        # レベルアップ時のUI表示
+        state_changes = response_data.get("state_changes") or {}
+        if state_changes.get("level_up") and session:
+            try:
+                user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
+                if user:
+                    embed = create_character_embed(session.character)
+                    levelup_view = LevelUpView(user, session.character, self.bot)
+                    
+                    channel = source.channel if isinstance(source, discord.Interaction) else source
+                    levelup_msg = await channel.send(
+                        content=f"{user.mention} **レベルアップ！** ステータスポイントを割り振ってください。",
+                        embed=embed,
+                        view=levelup_view
+                    )
+                    levelup_view.message = levelup_msg
+            except Exception as e:
+                logging.exception(f"レベルアップUIの表示中にエラーが発生しました: {e}")
 
         # 戦闘開始の処理
         if session and session.in_combat and not session.combat_view_message_id:
@@ -141,6 +183,13 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
     async def _proceed_and_respond_from_interaction(self, interaction: discord.Interaction, action: str):
         """Interactionからゲームを進行させ、応答を処理する"""
         try:
+            # ボタン押下時の処理: 応答を保留し、選択した行動をチャットに投稿する
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+            
+            if interaction.type == discord.InteractionType.component:
+                await interaction.channel.send(f"> **{interaction.user.display_name}**: {action}")
+
             # アイテム使用アクションの場合は use_item を経由させる
             if action.startswith("アイテム使用: "):
                 item_name = action.replace("アイテム使用: ", "").strip()
@@ -210,10 +259,9 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
 
     @app_commands.command(name="start_game", description="キャラクターと世界を選択して新しいゲームを開始します。")
     @app_commands.describe(
-        character_name="ゲームに使用するキャラクターの名前",
-        world_name="冒険の舞台となる世界の名前"
+        character_name="ゲームに使用するキャラクターの名前"
     )
-    async def start_game(self, interaction: discord.Interaction, character_name: str, world_name: str):
+    async def start_game(self, interaction: discord.Interaction, character_name: str):
         """
         キャラクターを選択し、プライベートスレッドを作成して新しいゲームセッションを開始します。
         """
@@ -227,7 +275,7 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
             session, introduction_narrative = await self.bot.game_service.start_game(
                 user_id=interaction.user.id,
                 character=character,
-                world_name=world_name
+                world_name="fantasy_world"
             )
 
             # 3. Discordスレッドを作成
@@ -254,7 +302,7 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
 
             # 最初の行動を促すための選択肢を提示 (UX向上のため)
             initial_actions = ["周囲を見渡す", "持ち物を確認する", "地図を見る"]
-            view = ActionSuggestionView(initial_actions, self.bot)
+            view = GameActionView(initial_actions, self._proceed_and_respond_from_interaction)
             message = await thread.send("最初の行動を選んでください:", view=view)
             view.message = message
 
@@ -509,6 +557,137 @@ class GameCommandsCog(commands.Cog, name="ゲーム管理"):
             # 不正解の場合
             await interaction.followup.send(f"「{answer}」…違うようだ。何も起こらない。")
 
+    # --- /quest コマンドグループ ---
+    quest_group = app_commands.Group(name="quest", description="クエストの受注や確認を行います。")
+
+    @quest_group.command(name="accept", description="クエストを受注します。")
+    @app_commands.describe(quest_id="受注するクエスト")
+    async def quest_accept(self, interaction: discord.Interaction, quest_id: str):
+        """指定したクエストを受注状態にします。"""
+        session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if not session or interaction.channel_id != session.thread_id:
+            await interaction.response.send_message("このコマンドは、あなたのアクティブなゲームスレッド内でのみ使用できます。", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        try:
+            response_data = await self.bot.game_service.accept_quest(interaction.user.id, quest_id)
+            await self._handle_response(interaction, response_data, interaction.user.id, f"クエスト受注: {quest_id}")
+        except GameError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
+    @quest_group.command(name="complete", description="クエストを完了します（強制）。")
+    @app_commands.describe(quest_id="完了するクエスト")
+    async def quest_complete(self, interaction: discord.Interaction, quest_id: str):
+        """指定したクエストを完了状態にします。"""
+        session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if not session or interaction.channel_id != session.thread_id:
+            await interaction.response.send_message("このコマンドは、あなたのアクティブなゲームスレッド内でのみ使用できます。", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        try:
+            response_data = await self.bot.game_service.complete_quest(interaction.user.id, quest_id)
+            await self._handle_response(interaction, response_data, interaction.user.id, f"クエスト完了: {quest_id}")
+        except GameError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
+    @quest_group.command(name="list", description="クエストの一覧を表示します。")
+    async def quest_list(self, interaction: discord.Interaction):
+        """現在のクエスト状況を表示します。"""
+        session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if not session:
+            await interaction.response.send_message(messaging.MSG_SESSION_REQUIRED, ephemeral=True)
+            return
+
+        world_data = self.bot.world_data_loader.get_world(session.world_name)
+        all_quests_data = world_data.get('quests', {})
+        all_enemies_data = world_data.get('enemies', {})
+        embed = create_journal_embed(session, all_quests_data, all_enemies_data)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @quest_accept.autocomplete('quest_id')
+    async def quest_accept_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if not session:
+            return []
+        
+        world_data = self.bot.world_data_loader.get_world(session.world_name)
+        quests = world_data.get("quests", {})
+        current_quests = getattr(session, "quests", {})
+        
+        choices = []
+        for q_id, q_data in quests.items():
+            # まだ受注していない(inactive)ものだけ
+            if current_quests.get(q_id, "inactive") == "inactive":
+                title = q_data.get("title", q_id)
+                if current.lower() in title.lower() or current.lower() in q_id.lower():
+                    choices.append(app_commands.Choice(name=f"{title}", value=q_id))
+        return choices[:25]
+
+    @quest_complete.autocomplete('quest_id')
+    async def quest_complete_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if not session:
+            return []
+        
+        world_data = self.bot.world_data_loader.get_world(session.world_name)
+        quests = world_data.get("quests", {})
+        current_quests = getattr(session, "quests", {})
+        
+        choices = []
+        for q_id, q_data in quests.items():
+            # 受注中(active)のものだけ
+            if current_quests.get(q_id) == "active":
+                title = q_data.get("title", q_id)
+                if current.lower() in title.lower() or current.lower() in q_id.lower():
+                    choices.append(app_commands.Choice(name=f"{title}", value=q_id))
+        return choices[:25]
+
+    # --- /talk コマンド ---
+    @app_commands.command(name="talk", description="現在地にいるNPCに話しかけます。")
+    @app_commands.describe(npc_name="話しかけるNPCの名前", message="会話内容（省略可）")
+    async def talk(self, interaction: discord.Interaction, npc_name: str, message: Optional[str] = None):
+        """NPCと会話を行う。"""
+        session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if not session or interaction.channel_id != session.thread_id:
+            await interaction.response.send_message("このコマンドは、あなたのアクティブなゲームスレッド内でのみ使用できます。", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        
+        # メッセージがあればチャットに表示
+        if message:
+            await interaction.channel.send(f"> **{interaction.user.display_name}**: 「{message}」")
+
+        try:
+            response_data = await self.bot.game_service.talk_to_npc(interaction.user.id, npc_name, message)
+            # talk_to_npc内でproceed_gameが呼ばれるため、ここでは応答処理のみ
+            action_display = f"会話: {npc_name}"
+            await self._handle_response(interaction, response_data, interaction.user.id, action_display)
+        except GameError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
+    @talk.autocomplete('npc_name')
+    async def talk_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        session = self.bot.game_service.sessions.get_session(interaction.user.id)
+        if not session:
+            return []
+        
+        world_data = self.bot.world_data_loader.get_world(session.world_name)
+        locations = world_data.get("locations", {})
+        current_loc = locations.get(session.current_location_id, {})
+        npcs_here_ids = current_loc.get("npcs", [])
+        all_npcs = world_data.get("npcs", {})
+        
+        choices = []
+        for npc_id in npcs_here_ids:
+            npc_data = all_npcs.get(npc_id, {})
+            name = npc_data.get("name", npc_id)
+            if current.lower() in name.lower():
+                choices.append(app_commands.Choice(name=name, value=name))
+        return choices[:25]
+
     @use_item.autocomplete('item_name')
     async def _use_item_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
         """インベントリ内のアイテムを候補として表示する"""
@@ -534,15 +713,8 @@ async def _character_autocomplete(interaction: discord.Interaction, current: str
     char_names = await bot.character_service.get_all_character_names(interaction.user.id)
     return [app_commands.Choice(name=name, value=name) for name in char_names if current.lower() in name.lower()][:25]
 
-async def _world_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-    """利用可能な世界名をオートコンプリートするための共通メソッド"""
-    bot: "MyBot" = interaction.client
-    world_names = await bot.game_service.get_world_list()
-    return [app_commands.Choice(name=name, value=name) for name in world_names if current.lower() in name.lower()][:25]
-
 async def setup(bot: "MyBot"):
     cog = GameCommandsCog(bot)
     cog.start_game.autocomplete('character_name')(_character_autocomplete)
-    cog.start_game.autocomplete('world_name')(_world_autocomplete)
     cog.delete_character.autocomplete('character_name')(_character_autocomplete)
     await bot.add_cog(cog)

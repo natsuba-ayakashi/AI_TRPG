@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 from pathlib import Path
+import os
 import asyncio
 
 from core.errors import GameError, FileOperationError, CharacterNotFoundError, AIConnectionError
@@ -64,12 +65,32 @@ class MyBot(commands.Bot):
                 except commands.ExtensionError as e:
                     logging.exception(f"Cog '{cog_name}' のロードに失敗しました。", exc_info=e)
 
-        # スラッシュコマンドをDiscordに同期
-        await self.tree.sync()
-        print("スラッシュコマンドを同期しました。")
+        # スラッシュコマンドをDiscordに同期 (開発用設定)
+        # 環境変数 DEV_GUILD_ID が設定されていれば、そのサーバーに即時同期する
+        dev_guild_id = os.getenv("DEV_GUILD_ID")
+
+        if dev_guild_id and dev_guild_id.isdigit():
+            guild = discord.Object(id=int(dev_guild_id))
+            self.tree.copy_global_to(guild=guild)
+            try:
+                await self.tree.sync(guild=guild)
+                print(f"スラッシュコマンドをサーバー(ID: {dev_guild_id})に同期しました。")
+            except discord.Forbidden:
+                logging.warning(f"開発用サーバー(ID: {dev_guild_id})への同期に失敗しました(Forbidden)。Botが参加していないか権限がありません。")
+            except discord.HTTPException as e:
+                logging.error(f"開発用サーバーへの同期中にエラーが発生しました: {e}")
+        else:
+            await self.tree.sync()
+            print("スラッシュコマンドをグローバル同期しました。")
 
     async def on_ready(self):
         print(f'{self.user} としてDiscordにログインしました')
+        
+        print("--- 参加しているサーバー一覧 ---")
+        for guild in self.guilds:
+            print(f"サーバー名: {guild.name} | ID: {guild.id}")
+        print("--------------------------------")
+
         await self._update_command_lists()
 
     async def _update_command_lists(self):
@@ -207,6 +228,8 @@ class MyBot(commands.Bot):
             return messaging.error_command_on_cooldown(error.retry_after)
         if isinstance(error, app_commands.MissingPermissions):
             return messaging.MSG_MISSING_PERMISSIONS
+        if isinstance(original_error, discord.HTTPException) and original_error.code == 50035:
+            return "システムエラー: 生成されたボタン等のラベルが長すぎて表示できませんでした（Discordの80文字制限）。"
         
         # マッピングにない未知のエラー
         return messaging.MSG_UNEXPECTED_ERROR
